@@ -597,7 +597,7 @@ TZ=Europe/Athens
 None block step 1. Answer them before the step they gate.
 
 1. **Gmail Pub/Sub topic** (gates step 8) — needs a Google Cloud project with Pub/Sub enabled. Worth setting up early; the OAuth consent screen can take a day to sort out.
-2. **Brain content** (gates step 5) — the follow-up agent drafts *entirely* from `brain`. `services`, `positioning`, `pricing` and the two `tone_of_voice` entries are the highest-leverage text in the system; they are effectively the agent's model of what the business sells and how it talks.
+2. **Brain content** (gates step 5) — now lives in `brain/*.md`, one file per key, edited as plain text and loaded with `pnpm seed`. See `brain/README.md`. The follow-up agent drafts *entirely* from `brain`. `services`, `positioning`, `pricing` and the two `tone_of_voice` entries are the highest-leverage text in the system; they are effectively the agent's model of what the business sells and how it talks.
 
    Two specifics settled in discussion, still to be written up:
    - **Scope is broader than websites.** Apps, e-commerce, NFC cards — the through-line is helping people get online and make money from it, or get an idea built. If `services` says "web development," the agent will pitch a website to someone who came about an app.
