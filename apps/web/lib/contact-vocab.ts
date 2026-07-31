@@ -13,8 +13,11 @@
  * dropdowns need these lists, and the dropdowns are Client Components.
  * lib/validation.ts value-imports `appTimezone` from @agency/core, whose barrel
  * re-exports the Supabase client factories — including the service-role one — so
- * it must never end up in a browser bundle. This file imports **types only**,
- * which TypeScript erases, so it is safe to import from anywhere.
+ * it must never end up in a browser bundle. This file imports types from that
+ * barrel, which TypeScript erases, and its one value import is from the
+ * `@agency/core/cadence` subpath — a leaf module of pure functions and string
+ * constants with no Supabase import at all. Both are safe in a browser bundle;
+ * importing a value from `@agency/core` itself here would not be.
  *
  * It previously existed twice: once here (as `CONTACT_STAGES`) and once in
  * components/ui/stage-badge.tsx (as `STAGES`), with two copies of
@@ -23,6 +26,7 @@
  * only one copy carried the `satisfies` constraint.
  */
 
+import { DELIVERED_TAG, NFC_CARD_TAG } from '@agency/core/cadence';
 import type { Language, Source, Stage } from '@agency/core';
 
 /** contacts_stage_check. Order is the pipeline's own order, which is the order
@@ -92,18 +96,28 @@ export const LANGUAGE_LABELS: Record<Language, string> = {
  *
  * Read by the follow-up agent at step 5: a contact tagged `ecommerce` gets a
  * materially different draft from one tagged `nfc-card`.
+ *
+ * **Two of these are load-bearing, not merely suggestions.** `nfc-card` and
+ * `delivered` are the two rows of SPEC §4's cadence table that have no stage of
+ * their own, so packages/core/src/cadence.ts keys off them: a `won` contact
+ * tagged `nfc-card` is scheduled at +14 with an upsell reason, one tagged
+ * `delivered` at +30 with a referral-and-testimonial reason, and an untagged
+ * `won` contact at +30 as a plain retainer check-in. They are imported from
+ * `@agency/core/cadence` rather than retyped so the chip an operator clicks and
+ * the string the cadence matches cannot drift apart.
  */
 export const SUGGESTED_TAGS = [
   'website',
   'web-app',
   'mobile-app',
   'ecommerce',
-  'nfc-card',
+  NFC_CARD_TAG,
   'seo',
   'redesign',
   'hosting',
   'maintenance',
   'branding',
+  DELIVERED_TAG,
 ] as const;
 
 /** Max tags per contact. A guard against a paste accident, not a design limit. */

@@ -380,6 +380,32 @@ Prompt assembly rules, enforced in code where possible:
 
 *Done when:* a real morning run produces pending tasks whose drafts the owner would actually send, and skipped contacts have `next_touch_at` pushed out with a logged reason.
 
+**Four constraints inherited from step 3.** The cadence functions are correct; these are all about how step 5 must *call* them.
+
+1. **The selection query in SPEC §4 contradicts the cadence table.** It says
+   `stage not in ('won','lost')`, but three of the six cadence rows — NFC card
+   +14, delivered +30, active client +30 — are all `won` contacts. Filtering
+   `won` out suppresses half the table and the retainer cadence never runs. Query
+   `do_not_contact = false and stage <> 'lost'` instead, or record excluding
+   `won` as a deliberate decision.
+
+2. **`contacts.touch_count` is a lifetime counter; `nextTouch` wants a
+   per-stage one.** Passing it straight through is a live bug: a lead touched
+   five times and then quoted arrives as `touchCount: 5`, falls off the end of
+   the three-step quoted sequence, and is marked dormant the day after being
+   quoted. Either reset the counter on stage change, or derive it by counting
+   `interactions` since the stage last changed. Do not pass `touch_count` raw.
+
+3. **Wrap each contact individually.** `nextTouch` throws a `RangeError` on a
+   corrupt `touchCount` (negative, fractional, NaN) rather than guessing. That is
+   the right call for one contact and a disaster for a batch: an unwrapped loop
+   means one bad row aborts the whole 08:00 run and *everybody* is missed that
+   day. Per-contact try/catch, and a failure files an alert task per SPEC §8.
+
+4. **`contacted` and `replied` are not rows in the spec table.** Step 3 folds
+   both into the new-lead +3/+7/+14 sequence — a reasonable reading, but a
+   reading. Confirm a contact who has actually replied should run at that pace.
+
 ### Step 6 — Today page + approve + send
 Metric tiles, task cards, three buttons, keyboard shortcuts (j/k/e/Enter). Gmail send with the local-time window and jitter (§7.1). `DRY_RUN` off.
 

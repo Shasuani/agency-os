@@ -16,3 +16,12 @@ export * from './types';
 export * from './env';
 export * from './db';
 export * from './settings';
+export * from './cadence';
+
+/**
+ * Note on `./cadence`: this barrel value-imports `./db`, which constructs the
+ * service-role Supabase client factory. A Client Component must therefore never
+ * import cadence constants from `@agency/core` — package.json exposes the
+ * subpath `@agency/core/cadence`, which is a leaf module with no Supabase
+ * import, for exactly that case.
+ */

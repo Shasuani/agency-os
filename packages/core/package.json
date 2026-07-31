@@ -8,10 +8,12 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./cadence": "./src/cadence.ts",
     "./package.json": "./package.json"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2"
