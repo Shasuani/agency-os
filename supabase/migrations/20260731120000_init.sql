@@ -44,6 +44,7 @@ create table if not exists contacts (
   next_touch_at   timestamptz,
   touch_count     int default 0,
   do_not_contact  boolean default false,
+  tags            text[] not null default '{}',   -- ADDED (PLAN §4): what the contact needs or bought
   created_at      timestamptz default now()
 );
 
@@ -63,6 +64,11 @@ alter table contacts add constraint contacts_stage_check
 
 create index if not exists contacts_next_touch_at_idx on contacts (next_touch_at);
 create index if not exists contacts_stage_idx on contacts (stage);
+
+-- Tags are free-form, so there is no CHECK constraint to mirror in the app. GIN
+-- is the index for array containment (`tags @> '{ecommerce}'`), which is how the
+-- /pipeline tag filter queries them.
+create index if not exists contacts_tags_idx on contacts using gin (tags);
 
 -- ---------------------------------------------------------------------------
 -- interactions — append-only log of every touch, in both directions.

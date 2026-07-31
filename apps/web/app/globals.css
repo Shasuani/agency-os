@@ -1,0 +1,367 @@
+/* ---------------------------------------------------------------------------
+ * Agency OS — design tokens and base layer.
+ *
+ * Tailwind v4, CSS-first config. There is NO tailwind.config.ts; everything a
+ * later agent needs is in this file and in apps/web/DESIGN.md.
+ *
+ * How the theming works, because it decides how you write components:
+ *
+ *   1. Raw hex values live in `:root` (light) and are overridden wholesale for
+ *      dark. Nothing else in the codebase contains a hex value.
+ *   2. `@theme inline` maps those variables onto Tailwind's colour namespace, so
+ *      `bg-surface`, `text-muted`, `border-line` etc. are real utilities.
+ *   3. Because the utilities resolve to `var(--…)`, THEY FLIP THEMSELVES. You
+ *      almost never need a `dark:` variant. Write `bg-raised text-ink` once.
+ *      If you find yourself reaching for `dark:`, the token is missing — add
+ *      the token here instead of branching at the call site.
+ *
+ * Dark mode follows the OS by default and can be pinned with
+ * `<html data-theme="light">` / `data-theme="dark"`.
+ * ------------------------------------------------------------------------- */
+
+@import 'tailwindcss';
+
+/* A `dark:` variant is registered for the rare case a token cannot express the
+ * difference (e.g. an inverted image). It matches the same two conditions the
+ * palette below does: the OS preference, unless light is pinned; or dark pinned
+ * explicitly. Prefer tokens — reach for `dark:` maybe twice in this codebase. */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    &:where(html:not([data-theme='light']), html:not([data-theme='light']) *) {
+      @slot;
+    }
+  }
+  &:where([data-theme='dark'], [data-theme='dark'] *) {
+    @slot;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 1. Palette — light. "Paper": warm bone, near-black warm ink.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces, back to front */
+  --surface: #f5f2ec; /* page */
+  --raised: #fbf9f5; /* panels, table head, inputs, cards */
+  --sunken: #eae6de; /* wells, disabled fields, inert chips */
+
+  /* Lines */
+  --line: #ddd7cb; /* hairlines: row separators, panel edges */
+  --line-strong: #c3bbab; /* lines that must read: input borders, focus-adjacent */
+
+  /* Ink */
+  --ink: #1b1a17; /* primary text, headings, numbers */
+  --muted: #5d594f; /* secondary text, column headers, meta */
+  --faint: #8a8478; /* tertiary: placeholders, units, empty markers */
+
+  /* Accent — cool cobalt against warm paper. Interaction only, never data. */
+  --accent: #2b4c8c;
+  --accent-hover: #1f3a6d;
+  --accent-fg: #fbf9f5;
+  --accent-subtle: #e1e8f4;
+
+  /* Data semantics */
+  --positive: #2e6b3a;
+  --positive-fg: #f4f8f3;
+  --positive-subtle: #dfeade;
+
+  --danger: #a33127;
+  --danger-fg: #fbf5f4;
+  --danger-subtle: #f4e0dc;
+
+  --warning: #7d5a11;
+  --warning-fg: #fdf9ef;
+  --warning-subtle: #f1e6cd;
+
+  /* Selection / focus */
+  --selection-bg: #d6e0f2;
+  --selection-fg: #1b1a17;
+
+  /* -- type stacks ------------------------------------------------------- *
+   * --font-sans-src / --font-display-src are injected by next/font on <html>
+   * in layout.tsx. These stacks are what everything else points at. */
+  --font-sans-stack:
+    var(--font-sans-src), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display-stack:
+    var(--font-display-src), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono-stack: ui-monospace, 'SF Mono', 'Menlo', 'Cascadia Mono', 'Roboto Mono', monospace;
+
+  /* -- density ----------------------------------------------------------- *
+   * Not a Tailwind namespace — use as h-[var(--row-h)] when you need them. */
+  --row-h: 2.125rem; /* 34px — table row */
+  --control-h-sm: 1.875rem; /* 30px — sm button / input */
+  --control-h-md: 2.125rem; /* 34px — md button / input */
+}
+
+/* ---------------------------------------------------------------------------
+ * 2. Palette — dark. "Graphite": cool near-black, warm bone ink.
+ * ------------------------------------------------------------------------- */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --surface: #131416;
+    --raised: #1a1c1f;
+    --sunken: #0e0f11;
+
+    --line: #292c30;
+    --line-strong: #3d4146;
+
+    --ink: #e9e6e0;
+    --muted: #9a958c;
+    --faint: #6d6961;
+
+    --accent: #7fa5e0;
+    --accent-hover: #9cbaea;
+    --accent-fg: #0e0f11;
+    --accent-subtle: #1b2635;
+
+    --positive: #6fbe7c;
+    --positive-fg: #0e0f11;
+    --positive-subtle: #17261a;
+
+    --danger: #ee7b70;
+    --danger-fg: #0e0f11;
+    --danger-subtle: #2d1917;
+
+    --warning: #d9a94a;
+    --warning-fg: #0e0f11;
+    --warning-subtle: #291f12;
+
+    --selection-bg: #2a3b57;
+    --selection-fg: #e9e6e0;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --surface: #131416;
+  --raised: #1a1c1f;
+  --sunken: #0e0f11;
+
+  --line: #292c30;
+  --line-strong: #3d4146;
+
+  --ink: #e9e6e0;
+  --muted: #9a958c;
+  --faint: #6d6961;
+
+  --accent: #7fa5e0;
+  --accent-hover: #9cbaea;
+  --accent-fg: #0e0f11;
+  --accent-subtle: #1b2635;
+
+  --positive: #6fbe7c;
+  --positive-fg: #0e0f11;
+  --positive-subtle: #17261a;
+
+  --danger: #ee7b70;
+  --danger-fg: #0e0f11;
+  --danger-subtle: #2d1917;
+
+  --warning: #d9a94a;
+  --warning-fg: #0e0f11;
+  --warning-subtle: #291f12;
+
+  --selection-bg: #2a3b57;
+  --selection-fg: #e9e6e0;
+}
+
+/* ---------------------------------------------------------------------------
+ * 3. Theme — what Tailwind turns into utilities.
+ *
+ * `inline` means Tailwind emits `var(--surface)` at the use site rather than
+ * copying the value, which is what makes the theme flip work.
+ * ------------------------------------------------------------------------- */
+
+@theme inline {
+  /* -- colour ------------------------------------------------------------ */
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-subtle: var(--accent-subtle);
+
+  --color-positive: var(--positive);
+  --color-positive-fg: var(--positive-fg);
+  --color-positive-subtle: var(--positive-subtle);
+
+  --color-danger: var(--danger);
+  --color-danger-fg: var(--danger-fg);
+  --color-danger-subtle: var(--danger-subtle);
+
+  --color-warning: var(--warning);
+  --color-warning-fg: var(--warning-fg);
+  --color-warning-subtle: var(--warning-subtle);
+
+  /* -- type -------------------------------------------------------------- */
+  --font-sans: var(--font-sans-stack);
+  --font-display: var(--font-display-stack);
+  --font-mono: var(--font-mono-stack);
+
+  /* Dense ladder. Body is 13px, not 16px — this is an instrument panel.
+   * Anything above --text-lg is display type: use font-display with it. */
+  --text-2xs: 0.625rem; /* 10px — micro caps: badges, column labels */
+  --text-2xs--line-height: 1.2;
+  --text-xs: 0.6875rem; /* 11px — dense meta, table footnotes */
+  --text-xs--line-height: 1.35;
+  --text-sm: 0.75rem; /* 12px — table cells, secondary text */
+  --text-sm--line-height: 1.4;
+  --text-base: 0.8125rem; /* 13px — BODY DEFAULT */
+  --text-base--line-height: 1.5;
+  --text-md: 0.875rem; /* 14px — form inputs, emphasised body */
+  --text-md--line-height: 1.45;
+  --text-lg: 1rem; /* 16px — section headings */
+  --text-lg--line-height: 1.35;
+  --text-xl: 1.25rem; /* 20px — page title */
+  --text-xl--line-height: 1.25;
+  --text-2xl: 1.625rem; /* 26px — inline figures */
+  --text-2xl--line-height: 1.1;
+  --text-3xl: 2.125rem; /* 34px — metric tiles (step 6) */
+  --text-3xl--line-height: 1;
+
+  /* -- geometry ---------------------------------------------------------- */
+  /* 4px base. The whole app is on multiples of 4; nothing uses an odd gap. */
+  --spacing: 0.25rem;
+
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 4px; /* default for buttons, inputs, badges */
+  --radius-lg: 6px; /* panels and cards */
+  --radius-xl: 8px;
+
+  /* Two shadows exist. Chrome uses neither; only task cards (step 6) get one. */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 12px -4px rgb(0 0 0 / 0.08);
+  --shadow-pop: 0 2px 4px rgb(0 0 0 / 0.08), 0 12px 28px -8px rgb(0 0 0 / 0.18);
+
+  /* Content width. `max-w-shell` on the page container, nothing wider. */
+  --container-shell: 84rem; /* 1344px */
+}
+
+/* ---------------------------------------------------------------------------
+ * 4. Base layer.
+ * ------------------------------------------------------------------------- */
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: var(--line);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    /* No smooth scroll: this app is keyboard-driven and animation costs time. */
+  }
+
+  body {
+    background-color: var(--surface);
+    color: var(--ink);
+    font-family: var(--font-sans-stack);
+    font-size: 0.8125rem; /* 13px — matches --text-base */
+    line-height: 1.5;
+    font-feature-settings: 'cv05' 1, 'cv08' 1; /* Inter: single-storey l, slashed 0 */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Headings are display type by default, so a screen never has to remember. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display-stack);
+    font-weight: 500;
+    letter-spacing: -0.012em;
+    color: var(--ink);
+  }
+
+  ::selection {
+    background-color: var(--selection-bg);
+    color: var(--selection-fg);
+  }
+
+  /* One focus treatment everywhere. Never remove it; if a control looks wrong
+   * with a ring, change the control. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Native controls follow the theme (date pickers, selects, scrollbars). */
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* The date input's calendar glyph is invisible on dark otherwise. */
+  ::-webkit-calendar-picker-indicator {
+    opacity: 0.55;
+    cursor: pointer;
+  }
+  ::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 5. Utilities. Three, deliberately. Everything else is a Tailwind utility or
+ *    a component in components/ui.
+ * ------------------------------------------------------------------------- */
+
+/* Any number the operator reads or compares: dates, counts, currency, IDs.
+ * Display face + tabular figures so columns line up and digits have character. */
+@utility numeric {
+  font-family: var(--font-display-stack);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: -0.005em;
+}
+
+/* Micro caps: table column headers, field labels above inputs.
+ * Sets no colour on purpose — pair it with `text-muted` or `text-faint` so the
+ * two never fight over source order. */
+@utility label-caps {
+  font-family: var(--font-display-stack);
+  font-size: 0.625rem; /* --text-2xs */
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+/* A 1px inset hairline that survives on both themes — for panel edges where a
+ * border would shift layout. */
+@utility hairline {
+  box-shadow: inset 0 0 0 1px var(--line);
+}

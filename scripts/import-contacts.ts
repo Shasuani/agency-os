@@ -65,6 +65,10 @@ const MAPPING = {
   next_touch_at: 'next_touch_at',
   touch_count: 'touch_count',
   do_not_contact: 'do_not_contact',
+  // Comma-separated in the CSV cell: "ecommerce, redesign". Normalized the same
+  // way the web form does — lowercased, spaces to hyphens, de-duplicated — so a
+  // tag typed here and a tag typed in the UI are the same tag.
+  tags: 'tags',
 } as const satisfies Record<string, string | null>;
 
 type ContactColumn = keyof typeof MAPPING;
@@ -300,6 +304,7 @@ type ContactRow = ContactInsert & {
   stage: Stage;
   touch_count: number;
   do_not_contact: boolean;
+  tags: string[];
 };
 
 type Reject = { row: number; email: string; reasons: string[] };
@@ -387,6 +392,31 @@ function deriveTimezone(country: string, city: string, explicit: string): string
   const byCity = CITY_TIMEZONES[city.toLowerCase()];
   if (byCity) return byCity;
   return COUNTRY_TIMEZONES[country] ?? DEFAULT_TIMEZONE;
+}
+
+/**
+ * Same rules as `normalizeTag`/`parseTags` in apps/web/lib/contact-vocab.ts, and
+ * they must stay in step: a tag imported here and the same tag typed into the
+ * form have to compare equal or the /pipeline filter splits them in two. Copied
+ * rather than imported because scripts/ is outside the web app's module graph.
+ */
+function normaliseTags(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(',')) {
+    const tag = part
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_]+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 32);
+    if (tag === '' || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+    if (out.length >= 20) break;
+  }
+  return out;
 }
 
 function normaliseCountry(raw: string): string | null {
@@ -506,6 +536,7 @@ function buildContact(row: Record<string, unknown>): { contact: ContactRow } | {
       next_touch_at: nextTouchAt,
       touch_count: touchCount,
       do_not_contact: doNotContact as boolean,
+      tags: normaliseTags(get(row, 'tags')),
     },
   };
 }
@@ -653,6 +684,10 @@ async function main(): Promise<void> {
         c.source ?? 'source:-',
         c.stage,
         c.next_touch_at ? `next:${c.next_touch_at.slice(0, 10)}` : 'next:-',
+        // Shown post-normalisation, which is the point of the dry run: "Web App"
+        // and "web_app" both print as `web-app`, so a spelling drift that would
+        // split the /pipeline filter in two is visible before anything is written.
+        c.tags.length > 0 ? `tags:${c.tags.join('+')}` : 'tags:-',
       ];
       if (c.do_not_contact) parts.push('DO-NOT-CONTACT');
       console.log(`  ${parts.join('  |  ')}`);

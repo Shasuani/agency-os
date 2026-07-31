@@ -6,10 +6,18 @@
  *   createBrowserClient()  anon key.          RLS APPLIES.    apps/web.
  *   createServiceClient()  service role key.  RLS BYPASSED.   apps/worker ONLY.
  *
- * RLS is enabled on every table with the single policy `auth.uid() is not null`
- * (PLAN.md §4). The anon client therefore sees nothing until the operator is
- * signed in via magic link; the service client sees and writes everything, with
- * no user attached to the request.
+ * RLS is enabled on every table with a single policy, `public.is_operator()`
+ * (supabase/migrations/20260731140000_rls_operator_only.sql), which compares the
+ * JWT's email against `settings.allowed_email` — the same address as
+ * `ALLOWED_EMAIL`. It replaced the `auth.uid() is not null` policy from the
+ * initial migration, which tested only that *a* JWT existed: the anon key is
+ * public by construction, so on a project with sign-ups enabled anyone could
+ * mint one and read the whole `contacts` table straight through PostgREST,
+ * where none of the app's email checks run.
+ *
+ * The anon client therefore sees nothing unless the operator is signed in; the
+ * service client bypasses RLS entirely and sees and writes everything, with no
+ * user attached to the request.
  *
  * The service role key must never reach a browser bundle. It is not prefixed
  * `NEXT_PUBLIC_`, so Next.js will not inline it — and `createServiceClient()`

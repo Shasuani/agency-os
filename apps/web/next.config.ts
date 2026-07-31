@@ -4,6 +4,32 @@ import { resolve } from 'node:path';
 import type { NextConfig } from 'next';
 
 /**
+ * The ONLY variables apps/web is allowed to see.
+ *
+ * This is the point of the allow-list, and it is a security control rather than
+ * tidiness: the root `.env` also holds `SUPABASE_SERVICE_ROLE_KEY`,
+ * `ANTHROPIC_API_KEY`, `GMAIL_REFRESH_TOKEN` and `VAPID_PRIVATE_KEY`. Copying
+ * the whole file onto `process.env` would put every one of them inside the web
+ * server process — and `createServiceClient()` from @agency/core would then
+ * return a working, RLS-bypassing client to any server file that imported it.
+ * The comment in lib/supabase/server.ts says that must never happen; this is
+ * what makes it true rather than aspirational. With the key absent,
+ * `createServiceClient()` throws `MissingEnvError` instead.
+ *
+ * Names are exactly PLAN.md §8. Adding one here means apps/web genuinely needs
+ * it in the browser or in a Server Component — say why in the same commit.
+ *
+ * Mirror this in production: never set `SUPABASE_SERVICE_ROLE_KEY` (or any of
+ * the other four) on the Vercel project. They belong to the Railway worker.
+ */
+const WEB_ENV_ALLOWLIST: ReadonlySet<string> = new Set([
+  'NEXT_PUBLIC_SUPABASE_URL',
+  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+  'ALLOWED_EMAIL',
+  'TZ',
+]);
+
+/**
  * Next.js reads `.env` from its own project directory (apps/web), not from the
  * monorepo root — it does not walk up. The operator keeps one `.env` at the repo
  * root (README setup step 3), so without this the whole `NEXT_PUBLIC_SUPABASE_*`
@@ -28,7 +54,8 @@ function loadRootEnv(): void {
     if (eq === -1) continue;
 
     const key = line.slice(0, eq).trim().replace(/^export\s+/, '');
-    if (key === '' || process.env[key] !== undefined) continue;
+    if (key === '' || !WEB_ENV_ALLOWLIST.has(key)) continue;
+    if (process.env[key] !== undefined) continue;
 
     let value = line.slice(eq + 1).trim();
     const quote = value.charAt(0);
@@ -51,6 +78,15 @@ loadRootEnv();
  */
 const nextConfig: NextConfig = {
   transpilePackages: ['@agency/core'],
+
+  /**
+   * Pin the monorepo root. Next infers it by walking up for a lockfile, and an
+   * unrelated `package-lock.json` further up the tree (e.g. in the home
+   * directory) wins over our `pnpm-lock.yaml` — Next then traces file
+   * dependencies from the wrong root, which warns locally and can ship the
+   * wrong set of files in a standalone build.
+   */
+  outputFileTracingRoot: resolve(process.cwd(), '../..'),
 };
 
 export default nextConfig;

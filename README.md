@@ -60,6 +60,12 @@ pnpm install
 
 Go to <https://supabase.com/dashboard> → **New project**. Pick the region closest to Greece (`eu-central-1`), set a database password, and wait for it to provision.
 
+Then, in the same dashboard, three settings that are part of the security model and are **not** in the repo:
+
+- **Authentication → URL Configuration → Redirect URLs.** Add the exact deploy origin(s), e.g. `https://your-app.vercel.app/auth/callback` and `http://localhost:3000/auth/callback`. No wildcards. This list is what stops a magic link being pointed at somebody else's origin.
+- **Authentication → Sign In / Providers → Email → "Allow new users to sign up".** Turn this **off** — *after* your first successful sign-in. This app needs exactly one user and never creates a second. Leaving it on means anyone can mint a JWT against the public anon key.
+- The `anon` key is public by design (it ships in the browser bundle). Everything that protects the data is RLS — see setup step 4.
+
 **3. Copy the credentials into `.env` (manual).**
 
 ```bash
@@ -86,12 +92,23 @@ In production there is no file: Vercel and Railway supply these as platform vari
 
 **4. Apply the schema migration, then the settings seed.**
 
-Open the Supabase dashboard → **SQL Editor** and run two files, in this order:
+Open the Supabase dashboard → **SQL Editor** and run three files, in this order:
 
-1. `supabase/migrations/20260731120000_init.sql` — creates `brain`, `contacts`, `interactions`, `tasks`, `agent_runs`, `settings` and `push_subscriptions`, plus their indexes, CHECK constraints and RLS policies.
-2. `supabase/seed.sql` — inserts the five `settings` rows: `kill_switch`, `autonomy`, `daily_send_cap`, `daily_cost_cap`, `send_window`.
+1. `supabase/migrations/20260731120000_init.sql` — creates `brain`, `contacts`, `interactions`, `tasks`, `agent_runs`, `settings` and `push_subscriptions`, plus their indexes and CHECK constraints.
+2. `supabase/migrations/20260731140000_rls_operator_only.sql` — replaces the initial "any authenticated user" RLS policy with `is_operator()`, which matches the JWT's email against one address. **Not optional.** Without it, anyone holding the public anon key can sign up and read and write every contact directly through PostgREST, because none of the app's `ALLOWED_EMAIL` checks run there.
+3. `supabase/seed.sql` — inserts the `settings` rows: `kill_switch`, `autonomy`, `daily_send_cap`, `daily_cost_cap`, `send_window`.
 
-Both are idempotent and safe to re-run. Skipping the second one is not fatal — reads fall back to `SETTING_DEFAULTS` in `packages/core/src/settings.ts` — but there is then nothing in the table for the operator to edit in `/brain`.
+Then tell the database who the operator is — the same address as `ALLOWED_EMAIL`:
+
+```sql
+insert into public.settings (key, value)
+values ('allowed_email', to_jsonb('you@example.com'::text))
+on conflict (key) do update set value = excluded.value, updated_at = now();
+```
+
+Until that row exists `is_operator()` returns false and every table reads as empty. That is deliberate — it fails closed. The worker is unaffected either way: it uses the service role key, which bypasses RLS.
+
+All three files are idempotent and safe to re-run. Skipping the seed is not fatal — reads fall back to `SETTING_DEFAULTS` in `packages/core/src/settings.ts` — but there is then nothing in the table for the operator to edit in `/brain`.
 
 **5. Seed `brain`.**
 

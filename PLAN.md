@@ -28,12 +28,13 @@ Things the spec left open. Each was decided in favour of "simplest thing that wo
 
 ### Additions to the spec's schema
 
-Four things the spec's flow needs but its DDL doesn't have. Flagged explicitly rather than smuggled in:
+Five things the spec's flow needs but its DDL doesn't have. Flagged explicitly rather than smuggled in:
 
 1. `tasks.send_after timestamptz` — the send delay / local-time window.
 2. `contacts.timezone text` — needed to compute that window for non-Greek contacts.
-3. `settings` table — autonomy levels, kill switch, volume ramp, spend ceiling.
-4. `push_subscriptions` table — Web Push endpoints.
+3. `contacts.tags text[]` — what the contact needs or bought. See §4.1.
+4. `settings` table — autonomy levels, kill switch, volume ramp, spend ceiling.
+5. `push_subscriptions` table — Web Push endpoints.
 
 ---
 
@@ -179,10 +180,12 @@ create table contacts (
   next_touch_at   timestamptz,
   touch_count     int default 0,
   do_not_contact  boolean default false,
+  tags            text[] not null default '{}',   -- ADDED: see §4.1
   created_at      timestamptz default now()
 );
 create index on contacts (next_touch_at);
 create index on contacts (stage);
+create index on contacts using gin (tags);
 
 create table interactions (
   id           uuid primary key default gen_random_uuid(),
@@ -256,7 +259,50 @@ create table push_subscriptions (
 
 Seed `brain` keys: `services`, `pricing`, `tone_of_voice_en`, `tone_of_voice_el`, `case_studies`, `positioning`, `availability`, `retainer_offer`.
 
-RLS: enable on every table, single policy `auth.uid() is not null`. The worker uses the service role key and bypasses it.
+RLS: enable on every table. The worker uses the service role key and bypasses it.
+
+**Correction (found during step 2).** An earlier draft of this plan specified the
+policy as `auth.uid() is not null`. That is not sufficient and was replaced in
+`20260731140000_rls_operator_only.sql`. The anon key is public by construction and
+Supabase projects allow sign-ups by default, so *any* stranger could mint a valid
+JWT and read the whole `contacts` table straight through PostgREST — where none of
+the app's `ALLOWED_EMAIL` checks run, because those live in Next.js middleware and
+Server Actions. The policy is now a `security definer` function `public.is_operator()`
+comparing `auth.jwt() ->> 'email'` against `settings.allowed_email`, and it fails
+closed when that row is unset.
+
+---
+
+## 4.1 Tags — what the contact needs or bought
+
+`contacts.tags text[]`, GIN-indexed, free-form.
+
+**No CHECK constraint, deliberately** — unlike `stage`, `source` and `language`.
+The work this business does is not a closed set: websites, apps, e-commerce, NFC
+cards, and whatever is sold next. A dropdown that cannot express the next thing
+is worse than a free-text field. The UI offers `SUGGESTED_TAGS` so spelling stays
+consistent enough for filtering, but anything can be typed.
+
+**Normalised on every write path** — form, CSV import, Server Action:
+lowercased, whitespace and underscores collapsed to single hyphens,
+de-duplicated, max 20 tags of 32 chars. `Web App`, `web app` and `web_app` all
+become `web-app`, so the filter never splits one tag into three.
+
+**Not the same thing as `source`,** and they are easy to conflate:
+
+| Column | Answers | Example |
+|---|---|---|
+| `source` | How they arrived | `nfc_card`, `referral`, `walk_in` |
+| `tags` | What they need or bought | `ecommerce`, `redesign`, `nfc-card` |
+
+Someone can arrive via an NFC card and want an e-commerce site. Keeping them
+apart matters at step 5: §4's cadence table treats "bought an NFC card" specially
+(+14 days, check-in plus web upsell), and inferring that from `source` is the
+wrong signal — `source` records the introduction, not the purchase.
+
+**Why this isn't cosmetic.** The follow-up agent reads the whole contact row
+before drafting. `tags: ["ecommerce", "redesign"]` tells it what the conversation
+was actually about, which changes the draft materially.
 
 ---
 

@@ -109,6 +109,8 @@ export type Database = {
           next_touch_at: string | null;
           touch_count: number | null;
           do_not_contact: boolean | null;
+          /** Free-form work tags, e.g. ['ecommerce','redesign']. NOT NULL, defaults to {}. */
+          tags: string[];
           created_at: string | null;
         };
         Insert: {
@@ -129,6 +131,7 @@ export type Database = {
           next_touch_at?: string | null;
           touch_count?: number | null;
           do_not_contact?: boolean | null;
+          tags?: string[];
           created_at?: string | null;
         };
         Update: {
@@ -149,6 +152,7 @@ export type Database = {
           next_touch_at?: string | null;
           touch_count?: number | null;
           do_not_contact?: boolean | null;
+          tags?: string[];
           created_at?: string | null;
         };
         Relationships: [];
