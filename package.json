@@ -21,6 +21,7 @@
     "@agency/core": "workspace:*"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@types/node": "^22.15.0",
     "csv-parse": "^5",
     "tsx": "^4",

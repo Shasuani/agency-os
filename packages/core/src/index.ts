@@ -17,6 +17,21 @@ export * from './env';
 export * from './db';
 export * from './settings';
 export * from './cadence';
+export * from './pricing';
+
+/**
+ * `llm.ts` is deliberately NOT re-exported here.
+ *
+ * It value-imports @anthropic-ai/sdk, and apps/web's Server Components import
+ * this barrel for `appTimezone`/`authEnv` — so re-exporting it put the whole
+ * Anthropic SDK into the Next.js server bundle for an app that never calls a
+ * model. Worse, it made an LLM call reachable from a Server Action by autocomplete.
+ *
+ * The worker imports it explicitly from the `@agency/core/llm` subpath, the same
+ * arrangement as `@agency/core/cadence`. `pricing.ts` stays here: it is pure
+ * arithmetic with no SDK import, and the web app may legitimately want to
+ * display a cost.
+ */
 
 /**
  * Note on `./cadence`: this barrel value-imports `./db`, which constructs the

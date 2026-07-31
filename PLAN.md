@@ -368,6 +368,24 @@ Cases from the spec: new lead +3/+7/+14→dormant; quoted +5/+10/+21; nfc_card +
 
 *Done when:* a call appears in `agent_runs` with correct token counts and a cost within a cent of hand-calculation.
 
+Verify with `pnpm exec tsx scripts/llm-probe.ts` — it prints the usage, the
+computed cost, the same figure by hand, and the difference. `--no-db` exercises
+the request shape with only an `ANTHROPIC_API_KEY`, before Supabase exists.
+
+**`llm.ts` is not exported from the `@agency/core` barrel**, deliberately. It
+value-imports the Anthropic SDK, and apps/web's Server Components import the
+barrel for `appTimezone` — so re-exporting it put the whole SDK into the Next.js
+server bundle for an app that never calls a model, and made an LLM call
+reachable from a Server Action by autocomplete. The worker imports
+`@agency/core/llm` explicitly, the same arrangement as `@agency/core/cadence`.
+
+**Cost is cache-aware and date-aware.** Cache writes bill at 1.25x input and
+reads at 0.1x, which matters because §2 puts the whole brain behind a cache
+breakpoint — ignoring it would over-report by roughly the size of the brain on
+every call after the first. Sonnet 5's introductory rate ($2/$10 vs $3/$15)
+expires 2026-09-01, so the rate is derived from when the call happened rather
+than hard-coded; a row written today still reads correctly next year.
+
 ### Step 5 — Follow-up agent (dry run, on cron)
 The flow from spec §4. Runs 08:00 Europe/Athens. Dry-run mode on.
 

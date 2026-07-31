@@ -3,19 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shared types, Supabase clients, settings and env access for Agency OS. Consumed as TypeScript source — never built to dist.",
+  "description": "Shared types, Supabase clients, settings and env access for Agency OS. Consumed as TypeScript source \u2014 never built to dist.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./cadence": "./src/cadence.ts",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./llm": "./src/llm.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/*.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@supabase/supabase-js": "^2"
   },
   "devDependencies": {
