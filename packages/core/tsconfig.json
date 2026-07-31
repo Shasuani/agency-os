@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Node built-ins: env.ts reads process.env, db.ts runs server-side.
+    "types": ["node"],
+    // Consumed as TypeScript source, never built to dist — nothing to emit.
+    "declaration": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // scripts/ is not a pnpm workspace package, so `pnpm -r typecheck` never
+  // reaches it. The root `typecheck` script runs `tsc -p scripts --noEmit`
+  // explicitly — without that, the two files that do step 1's actual work are
+  // the only TypeScript in the repo nobody compiles.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules"]
+}

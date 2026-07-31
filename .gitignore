@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# builds
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# env — real secrets never get committed
+.env
+.env.*
+!.env.example
+
+# local data (contact CSVs are personal data — keep them out of git)
+*.local.csv
+contacts.csv
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
