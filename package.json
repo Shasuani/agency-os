@@ -24,6 +24,7 @@
     "@anthropic-ai/sdk": "^0.115.0",
     "@types/node": "^22.15.0",
     "csv-parse": "^5",
+    "playwright": "^1.62.1",
     "tsx": "^4",
     "typescript": "^5.7.0"
   }

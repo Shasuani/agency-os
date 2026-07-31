@@ -97,11 +97,46 @@ async function sendMagicLink(formData: FormData): Promise<void> {
   redirect('/login?sent=1');
 }
 
+/**
+ * Password sign-in.
+ *
+ * Added because magic links are not dependable enough to be the only way in:
+ * Supabase's built-in mailer allows ~2 messages an hour on the free tier, and
+ * the PKCE link only works in the browser that requested it — so opening it from
+ * a phone or a webmail in-app browser silently fails. Locking the operator out
+ * of their own tool because an email did not arrive is not an acceptable
+ * failure mode for something used every morning.
+ *
+ * Same guard as the magic-link path: only ALLOWED_EMAIL can sign in, and a
+ * wrong address gets the same generic message as a wrong password so the form
+ * never confirms which address owns the account.
+ */
+async function signInWithPassword(formData: FormData): Promise<void> {
+  'use server';
+
+  const email = String(formData.get('email') ?? '').trim().toLowerCase();
+  const password = String(formData.get('password') ?? '');
+  const next = safeNextPath(String(formData.get('next') ?? '')) ?? '/';
+
+  if (!isValidEmail(email) || password === '') redirect('/login?error=bad_credentials');
+
+  const { allowedEmail } = authEnv();
+  if (!matchesAllowedEmail(email, allowedEmail)) redirect('/login?error=bad_credentials');
+
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+
+  if (error !== null) redirect('/login?error=bad_credentials');
+
+  redirect(next);
+}
+
 const MESSAGES: Record<string, string> = {
   invalid_email: 'That is not a valid email address.',
   send_failed: 'The link could not be sent. Try again in a moment.',
   not_allowed: 'That account cannot access this app.',
   link_invalid: 'That link has expired or was already used. Request a new one.',
+  bad_credentials: 'Wrong email or password.',
   misconfigured: 'ALLOWED_EMAIL is not set on this deployment. Nobody can sign in until it is.',
 };
 
@@ -159,21 +194,43 @@ export default async function LoginPage({
         </p>
       ) : null}
 
-      <form action={sendMagicLink} className="flex flex-col gap-3">
+      {/* Password first: it is the path that always works. The magic link is
+          kept because it is genuinely nicer when it works, but it depends on an
+          email arriving AND on the link being opened in this same browser, and
+          neither is guaranteed. */}
+      <form action={signInWithPassword} className="flex flex-col gap-3">
         <input type="hidden" name="next" value={next} />
 
         <Field name="email" label="Email">
           <Input
             type="email"
             inputMode="email"
-            autoComplete="email"
+            autoComplete="username"
             autoFocus
             required
             spellCheck={false}
           />
         </Field>
 
+        <Field name="password" label="Password">
+          <Input type="password" autoComplete="current-password" required />
+        </Field>
+
         <Button type="submit" variant="primary" className="w-full">
+          Sign in
+        </Button>
+      </form>
+
+      <form action={sendMagicLink} className="flex flex-col gap-2 border-t border-line pt-4">
+        <input type="hidden" name="next" value={next} />
+        <p className="text-xs text-faint">
+          Or email a link instead. It only works in the browser that requested it, and the free
+          tier allows about two an hour.
+        </p>
+        <Field name="email" label="Email for the link">
+          <Input type="email" inputMode="email" required spellCheck={false} />
+        </Field>
+        <Button type="submit" variant="ghost" className="w-full">
           Send link
         </Button>
       </form>

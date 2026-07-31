@@ -76,7 +76,7 @@ export async function updateContact(id: string, formData: FormData): Promise<Act
 
   const { data: existing, error: readError } = await supabase
     .from('contacts')
-    .select('id, next_touch_at, do_not_contact')
+    .select('id, next_touch_at, do_not_contact, stage')
     .eq('id', id)
     .maybeSingle();
 
@@ -113,7 +113,18 @@ export async function updateContact(id: string, formData: FormData): Promise<Act
     return fail({ next_touch_at: 'That date has already passed. Pick today or later.' });
   }
 
-  const { error } = await supabase.from('contacts').update(value).eq('id', id);
+  // Stamp the transition. The follow-up agent counts outbound interactions
+  // *since the stage last changed* to get a per-stage touch count (PLAN.md §6
+  // step 5, constraint 2) — without this, a lead chased five times and then
+  // quoted starts its quoted cadence already past the end of it, and is marked
+  // dormant the day after being quoted. Only written when the stage genuinely
+  // moves, so re-saving an unchanged contact does not reset their cadence.
+  const stageChanged = value.stage !== existing.stage;
+  const patch = stageChanged
+    ? { ...value, stage_changed_at: new Date().toISOString() }
+    : value;
+
+  const { error } = await supabase.from('contacts').update(patch).eq('id', id);
 
   if (error !== null) return fail({ form: `Could not save the contact: ${error.message}` });
 
