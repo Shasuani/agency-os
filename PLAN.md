@@ -2,7 +2,7 @@
 
 Derived from the build spec. This file is the working plan: resolved decisions, file layout, schema, and a step-by-step build order with acceptance criteria for each step.
 
-**Rule:** ship each step before starting the next. Stop at step 9. Nothing in "Explicitly out of scope for v1" gets built.
+**Rule:** ship each step before starting the next. Steps 1–9 are v1. Step 10 is specified but gated — see §6. Nothing else from "Explicitly out of scope for v1" gets built.
 
 ---
 
@@ -416,7 +416,39 @@ When `final_body` differs from `draft_body`, feed the pair back as a style examp
 
 *Done when:* an edited draft measurably shifts the next draft's register in the same language.
 
-**Stop here.** No finance, content, trends, design, or legal agents until 50+ contacts are in the database and the daily loop is genuinely in use.
+**v1 ends here.** No finance, content, trends, design, or legal agents until 50+ contacts are in the database and the daily loop is genuinely in use.
+
+### Step 10 — Lead Research agent (specified, gated, not started)
+
+Where the *next* warm lead comes from, rather than making sure existing ones
+aren't forgotten. Full spec in **[LEAD_RESEARCH.md](./LEAD_RESEARCH.md)**.
+
+This revises `SPEC.md` §10, which put cold outbound out of scope for v1. It stays
+out of scope for v1 — this is step 10, after v1 ships.
+
+**Do not start until all four are true:**
+
+1. Steps 1–9 shipped and in daily use
+2. 50+ contacts in the database
+3. The follow-up drafts are trusted without reading every word
+4. A **separate sending domain** is registered and warmed
+
+**Two things that must not be got wrong**, both documented at length in the spec:
+
+- **A separate sending domain.** Cold outreach produces spam complaints; warm
+  follow-ups produce replies. Share a domain between them and the complaints
+  poison the reputation the follow-ups depend on — mail to real customers starts
+  landing in spam and the app silently stops working.
+- **A separate `prospects` table.** A researched lead written into `contacts`
+  with a `next_touch_at` gets picked up by the step-5 agent, which drafts
+  outreach to a stranger who never met you — appearing in the morning queue
+  looking exactly like a real follow-up. Promotion into `contacts` is an explicit
+  button press, never a status flag.
+
+Three questions need real answers before any code: where the Lead Hunter sources
+candidates and whether those terms permit it, the legality of cold B2B email in
+Greece specifically, and the profiling obligations that come with long-term
+intelligence profiles.
 
 ---
 
