@@ -3,7 +3,7 @@
 -- Generated for operator: kostaskolta@yahoo.com
 -- Safe to re-run: every statement is idempotent.
 
--- ===================== 1/4  schema =====================
+-- ===================== 1/5  schema =====================
 -- Agency OS — initial schema
 -- Source of truth: PLAN.md §4 (schema), §1 (additions to the spec's schema), §7 (guardrails).
 --
@@ -223,7 +223,66 @@ drop policy if exists "authenticated" on push_subscriptions;
 create policy "authenticated" on push_subscriptions
   for all using (auth.uid() is not null) with check (auth.uid() is not null);
 
--- ===================== 2/4  RLS ========================
+-- ===================== 2/5  later migrations ===========
+-- Everything under supabase/migrations/ that came after the initial schema.
+--
+-- This section exists because it was missing, and the omission was not cosmetic:
+-- a database built from this file, or from README §4's three-file list, had
+-- neither `contacts.stage_changed_at` nor the inbound dedupe index. The first
+-- fails loudly — PostgREST answers PGRST204 on the first inbound contact and on
+-- every stage edit in /pipeline — and the second fails silently, which is worse:
+-- `claimMessage` in the inbox agent treats a 23505 from that index as "another
+-- delivery already has this message", so without it there is no 23505, the
+-- exactly-once claim degrades to a non-atomic read-then-write, and two workers
+-- during a rolling deploy produce two Anthropic charges and two identical cards
+-- for one customer email.
+--
+-- Keep this section in step with supabase/migrations/. The files there carry the
+-- full reasoning for each statement; what follows is the DDL only.
+
+-- 20260731180000_stage_changed_at.sql
+-- The per-stage touch count is "outbound interactions since the stage last
+-- changed", and nothing else records the transition.
+alter table contacts add column if not exists stage_changed_at timestamptz;
+
+update contacts set stage_changed_at = coalesce(stage_changed_at, created_at, now())
+ where stage_changed_at is null;
+
+comment on column contacts.stage_changed_at is
+  'When stage last changed. Drives the per-stage touch count in the follow-up agent. Set by the app on every stage transition.';
+
+-- 20260803120000_inbox_dedupe_and_indexes.sql
+-- The inbound dedupe key. The interactions row IS the claim: the worker inserts
+-- it before it calls Haiku, and a 23505 here means somebody else owns that
+-- message. Partial, so dry-run sends (which write a null Gmail id) stay out.
+create unique index if not exists interactions_gmail_message_id_key
+  on public.interactions ((meta ->> 'gmail_message_id'))
+  where meta ->> 'gmail_message_id' is not null;
+
+comment on index public.interactions_gmail_message_id_key is
+  'Dedupe key for inbound Gmail. The interactions row is the claim: a 23505 here means another delivery already has this message, so no model call is made.';
+
+-- Serves /inbox (inbound, newest first) and the rolling 24h outbound count the
+-- guardrails run immediately before every send.
+create index if not exists interactions_direction_occurred_at_idx
+  on public.interactions (direction, occurred_at desc);
+
+comment on index public.interactions_direction_occurred_at_idx is
+  'Serves /inbox (inbound, newest first, windowed) and the guardrails rolling 24h outbound count.';
+
+-- 20260803160000_contacts_email_unique.sql
+-- One contact row per address. do_not_contact and the 48-hour cooldown are both
+-- per row, so two rows sharing an address are two ways to email one person after
+-- they asked you not to. Partial and case-folded: contacts with no address are
+-- the commonest kind in this pipeline and are unaffected.
+create unique index if not exists contacts_email_unique
+  on public.contacts (lower(btrim(email)))
+  where email is not null and btrim(email) <> '';
+
+comment on index public.contacts_email_unique is
+  'One contact row per email address. do_not_contact and the 48h cooldown are per row, so two rows sharing an address are two ways to email one person after they said no.';
+
+-- ===================== 3/5  RLS ========================
 -- Agency OS — tighten RLS from "any authenticated user" to "the operator".
 --
 -- WHY THIS EXISTS
@@ -343,7 +402,7 @@ begin
 end;
 $$;
 
--- ===================== 3/4  settings seed ==============
+-- ===================== 4/5  settings seed ==============
 -- Agency OS — seed data (operational settings only)
 -- Source of truth: PLAN.md §4 (settings seed values), §7.1 (send window, ramp).
 --
@@ -391,13 +450,33 @@ insert into settings (key, value) values
 
 on conflict (key) do nothing;
 
--- ===================== 4/4  operator ===================
+-- ===================== 5/5  operator ===================
 -- Without this row every table reads empty, by design.
+--
+-- EDIT THE ADDRESS BELOW BEFORE RUNNING. It is a real address, not a
+-- placeholder, and it must match the ALLOWED_EMAIL in the root .env. Unlike
+-- every other statement in this file, this one is `do update` rather than
+-- `do nothing` — so it overwrites whatever is already there. Re-running the
+-- file after changing the operator in /brain silently reverts it, and the only
+-- symptom is that every table starts reading empty with nothing in any log.
 insert into settings (key, value) values
   ('allowed_email', to_jsonb('kostaskolta@yahoo.com'::text))
 on conflict (key) do update set value = excluded.value, updated_at = now();
 
 -- verify
+-- The last three rows are the ones that used to be missing. `stage_changed_at`
+-- must be `yes`, and both indexes must be `yes`, or the inbox agent is either
+-- broken outright or quietly not deduping.
 select 'tables' as check, count(*)::text as result from information_schema.tables where table_schema='public'
 union all select 'rls policies', count(*)::text from pg_policies where schemaname='public'
-union all select 'operator', coalesce((select value #>> '{}' from settings where key='allowed_email'), 'MISSING');
+union all select 'operator', coalesce((select value #>> '{}' from settings where key='allowed_email'), 'MISSING')
+union all select 'contacts.stage_changed_at',
+  case when exists (select 1 from information_schema.columns
+                     where table_schema='public' and table_name='contacts'
+                       and column_name='stage_changed_at') then 'yes' else 'MISSING' end
+union all select 'interactions_gmail_message_id_key',
+  case when exists (select 1 from pg_indexes where schemaname='public'
+                     and indexname='interactions_gmail_message_id_key') then 'yes' else 'MISSING' end
+union all select 'contacts_email_unique',
+  case when exists (select 1 from pg_indexes where schemaname='public'
+                     and indexname='contacts_email_unique') then 'yes' else 'MISSING' end;

@@ -4,6 +4,10 @@ Derived from the build spec. This file is the working plan: resolved decisions, 
 
 **Rule:** ship each step before starting the next. Steps 1–9 are v1. Step 10 is specified but gated — see §6. Nothing else from "Explicitly out of scope for v1" gets built.
 
+**The rule was not followed.** All nine steps are written; none has been run
+against real data. §6 carries a per-step State note and every place the build
+diverged from this plan. `STATUS.md` carries the blockers.
+
 ---
 
 ## 1. Resolved decisions
@@ -25,6 +29,14 @@ Things the spec left open. Each was decided in favour of "simplest thing that wo
 | Send timing | Fixed rule (business hours in recipient's timezone), not an optimisation agent | The send-time studies are bulk-marketing data and contradict each other. The real reason to respect local time is that 3am delivery reads as a bot. See §7.1. |
 | Daily volume | Ramped, stored in `settings`, not a constant 40 | A new domain sending 40/day from day one lands in spam permanently. See §7.1. |
 | Cost ceiling | Daily `cost_usd` cap in `settings`; agents halt and file an alert when breached | Cheapest insurance against a loop bug burning money at 3am. |
+
+**Two rows of that table are now wrong. Both are argued in §6 rather than here,
+so the original decision and the reason it was overturned stay side by side:**
+
+- **Cron.** There is no `node-cron`. The worker schedules in process with an
+  explicit timezone, which is what the row actually asked for. See §6 step 7.
+- **Auth.** Magic links do not work with mail clients that open links in an
+  embedded browser; login is `signInWithPassword`. See §6 step 2.
 
 ### Additions to the spec's schema
 
@@ -342,15 +354,65 @@ Cost table for the calculation (per million tokens): Sonnet 5 $3 in / $15 out; H
 
 Nine steps. Each is deployed and used before the next starts.
 
+**Status of this section, 2026-08-03.** The rule above was not followed. Code for
+all nine steps exists; none of it has been run against real data. Each step below
+carries a **State** note distinguishing "written and tested" from "done", and a
+**Divergence** note wherever the implementation deliberately departed from what
+this plan says. The divergence notes are the point: this file is the record of
+decisions, and a decision that is not written here gets re-argued later.
+`STATUS.md` carries the blockers and the numbers; this section carries the
+reasoning.
+
+Nothing in the original step text below has been deleted, including the parts
+that turned out to be wrong.
+
 ### Step 1 — Foundation
 Repo, pnpm workspaces, Supabase project, schema migration applied, `brain` seeded with real content, contacts imported from CSV.
 
 *Done when:* real contacts are queryable in Supabase and `brain` has actual services and pricing text in it, not placeholders.
 
+**State: partially done.** Repo, workspaces and Supabase project exist. Two
+migrations (`init`, `rls_operator_only`) are applied and verified against real
+Postgres. `brain` is **not** seeded with real content — 5 of 8 keys hold the
+owner's words, `tone_of_voice_el` holds rules but no voice, and the three
+deliberately-empty keys are correct as they are. No CSV has been imported; there
+are 0 contacts. By its own acceptance criterion this step is not done.
+
+**Divergence: one migration file became five.** §4 says "one migration file to
+start". `20260731140000_rls_operator_only` is documented in §4's Correction.
+Three more were added later and each is load-bearing:
+
+- `20260731180000_stage_changed_at` — see §6 step 5, constraint 2.
+- `20260803120000_inbox_dedupe_and_indexes` — the unique partial index on
+  `interactions.meta->>'gmail_message_id'`. Step 8's exactly-once claim *is* this
+  index; see step 8 below.
+- `20260803160000_contacts_email_unique` — a partial unique index on
+  `lower(btrim(email))`. §4's DDL has no uniqueness on `contacts.email`, which
+  was a gap rather than a decision: `do_not_contact` and the 48-hour cooldown are
+  recorded per *row* while the address identifies a *person*, so two rows are two
+  ways to mail someone who has said no. Rejected objection: shared `info@`
+  mailboxes. They share an inbox, so they should share the cooldown.
+
+All three are idempotent. All three are in `SETUP.md` §1.4 and in
+`supabase/SETUP_RUN_ME.sql`, which they were not when they were written — that
+omission is recorded in `STATUS.md` blocker 0. (They were briefly listed in
+`README.md` §4; that section no longer exists — the setup procedure moved to
+`SETUP.md` in full.)
+
 ### Step 2 — `/pipeline`
 List, create, edit contacts. Manual `next_touch_at`. Stage dropdown. No AI.
 
 *Done when:* the owner can add a contact met yesterday and set a follow-up date, from the deployed app.
+
+**State: written and tested; acceptance unmet.** There is no deployed app — no
+Vercel project and no Railway service exist — and no contact has been added.
+
+**Divergence: password auth, not magic links.** §1's table says "Supabase magic
+link". It does not work here and will not be made to. The PKCE code-verifier
+cookie is written by the browser that *requested* the link, and mail clients open
+links in their own embedded browser, so the callback arrives without the verifier
+and fails; free-tier email rate limits (~2/hour) make it undebuggable on top.
+`signInWithPassword` against a single `ALLOWED_EMAIL`. Do not revert this.
 
 ### Step 3 — Cadence functions
 `packages/core/cadence.ts`. Pure functions, no I/O, unit tested against the spec's table.
@@ -362,6 +424,11 @@ nextTouch(stage: Stage, touchCount: number, source: Source): { days: number } | 
 Cases from the spec: new lead +3/+7/+14→dormant; quoted +5/+10/+21; nfc_card +14; won +30; delivered +30; dormant +90.
 
 *Done when:* tests pass for every row of the cadence table, including the transitions to dormant.
+
+**State: done.** This is the only step whose acceptance criterion is fully met,
+and it is met because the criterion is a test rather than an observation. That is
+worth noticing rather than celebrating: every step after this one has a criterion
+that requires the system to actually run, and none of those have been met.
 
 ### Step 4 — LLM wrapper
 `llm.ts` + `agent_runs` logging. Prove it with one throwaway script that classifies a string and writes a run row.
@@ -385,6 +452,18 @@ breakpoint — ignoring it would over-report by roughly the size of the brain on
 every call after the first. Sonnet 5's introductory rate ($2/$10 vs $3/$15)
 expires 2026-09-01, so the rate is derived from when the call happened rather
 than hard-coded; a row written today still reads correctly next year.
+
+**State: written and tested; acceptance unmet.** No call has ever been made.
+`ANTHROPIC_API_KEY` is the literal string `placeholder`, `agent_runs` has 0 rows,
+and the "cost within a cent of hand-calculation" check has never been run.
+`scripts/llm-probe.ts` exists to run it and has never been run.
+
+**Divergence: the cost cap's day boundary is `appTimezone()`, not UTC.** §5 says
+"sums `cost_usd` for the current day" without saying whose day. UTC would move
+the reset to 02:00 or 03:00 Athens time, i.e. into the middle of the night the
+cap exists to protect. It also now *refuses* rather than under-counting when the
+cost query is truncated or errors: an unreadable spend history is not the same as
+zero spend, and treating it as zero is how a cap fails open.
 
 ### Step 5 — Follow-up agent (dry run, on cron)
 The flow from spec §4. Runs 08:00 Europe/Athens. Dry-run mode on.
@@ -424,6 +503,38 @@ Prompt assembly rules, enforced in code where possible:
    both into the new-lead +3/+7/+14 sequence — a reasonable reading, but a
    reading. Confirm a contact who has actually replied should run at that pace.
 
+**State: written and tested; acceptance unmet, and it is the criterion that
+matters most.** No morning run has produced a draft, because there is no API key
+and there are no contacts. Nobody has read a draft this system wrote. Until that
+happens, steps 6–9 are scaffolding around an unevaluated thing.
+
+**Four amendments made after steps 6–8 existed.** None of these were visible when
+step 5 was written alone; each is a consequence of another agent sharing the same
+tables.
+
+1. **`next_touch_at` is re-anchored after the send, not at draft time.** The
+   draft-time write used the interval from *before* the touch it was filing, so
+   the cadence collapsed inward — and it collapsed even with same-day approval,
+   which is the common case, not an edge one. A fourth post-send write now
+   re-anchors on the message that actually left, using the touch count including
+   the new row, and only ever outward.
+2. **An open draft of any kind suppresses the next morning's follow-up.** The
+   selection query originally looked for a pending task from the follow-up agent.
+   With step 8 in place, an approved-but-unsent draft and a pending *inbox reply*
+   are both reasons not to draft again — otherwise the morning run writes a
+   follow-up to someone whose question is sitting unanswered in the queue.
+3. **Contacts with no usable email are excluded in the query.** They used to be
+   selected, fail, and keep their date — permanently occupying the head of an
+   oldest-first list. They now keep their `/pipeline` reminder without blocking
+   anyone. Separately, a full run that drafts *nothing* files an alert, so a
+   silently-empty morning is no longer indistinguishable from a quiet one.
+4. **Inbound `interactions` bodies and subjects are fenced in the prompt.**
+   Before step 8, every `interactions` row was operator-entered and the follow-up
+   prompt rendered them raw. Step 8 made those rows a stranger's text without the
+   prompt changing. Bodies, subjects and the `From:` display name are now
+   length-bounded, flattened and marker-stripped at every prompt site, and the
+   display name is capped where it is written as well as where it is read.
+
 ### Step 6 — Today page + approve + send
 Metric tiles, task cards, three buttons, keyboard shortcuts (j/k/e/Enter). Gmail send with the local-time window and jitter (§7.1). `DRY_RUN` off.
 
@@ -437,10 +548,65 @@ Empty state is a success state: "Nothing needs you. 9 things handled."
 
 *Done when:* the owner approves a real follow-up from the laptop and the recipient receives it.
 
+**State: written and tested; acceptance unmet. `DRY_RUN` is still `true` and no
+message has ever been sent to anybody.** The line above says "`DRY_RUN` off" and
+that has not happened, deliberately — turning it off before a draft has been read
+means the first thing this system does with a real customer is something nobody
+has checked. The pre-send list in this step (SPF/DKIM/DMARC verified,
+`daily_send_cap` at 10, footer wired) is also unmet: no sending domain has been
+configured. See `STATUS.md` blocker 8.
+
+**Divergence 1: Server Actions, not `app/api/tasks/[id]/*` route handlers.** §3's
+layout sketches three route handlers for approve / skip / edit. They are
+`approveTask`, `saveDraft`, `rejectTask` and `skipTask` in
+`apps/web/lib/task-actions.ts`. A route handler for a same-origin button is a
+fetch wrapper, a JSON contract and a second auth check to keep in sync; a Server
+Action is the mutation. There are no `app/api` routes in the web app at all.
+
+**Divergence 2: no `/content` and `/money` stubs.** §3's layout lists both. They
+were not built. A nav entry leading to an empty page is a promise, and this step's
+own reasoning already deleted the "unpaid" tile for exactly that reason — a
+number with no source lies every morning. Build them when there is something
+behind them.
+
+**Divergence 3: the send window is per-agent.** See §7.1's amendment.
+
+**Divergence 4: `sendEmail` is the `sendRaw` §7 says does not exist.** See §7's
+amendment. This one is a weakening of a stated guarantee, not a refinement of it,
+and it is recorded so that nobody reads §7's guardrail table and believes the
+property holds by construction.
+
 ### Step 7 — Notifications
 Web Push subscription + one daily digest after the morning run. One notification, not per-task.
 
 *Done when:* "4 follow-ups ready" arrives once, at a sane hour.
+
+**State: written and tested; acceptance unmet.** No VAPID keypair exists, so no
+browser has ever subscribed, so no notification has ever been delivered. With no
+`push_subscriptions` rows `sendPush` is a logged no-op, which means this step
+fails *quietly* if the keys are set on Railway but the operator never clicks
+"Enable notifications" in `/brain`. iOS Safari cannot subscribe at all until
+there is a web app manifest, and there is not one.
+
+**Divergence: the digest is not a scheduled job.** The obvious implementation is
+a second timer at, say, 08:30. It is wrong, and the reason generalises: two
+independent timers cannot be ordered. A slow morning — forty contacts, a Sonnet
+call each, one retry — runs past any fixed offset, and the operator gets "0
+follow-ups ready" at 08:30 followed by four cards appearing at 08:34. Nothing
+errors; the notification is simply a lie, and the first lie is what teaches
+somebody to ignore the next one.
+
+`runDigest` is therefore called at the end of `runFollowupJob`, on the success
+path **and** the failure path. The failure path is the more important half:
+"the morning run failed" is the single most important thing this system can tell
+its operator, and a fixed-time digest would have said nothing at all.
+
+**Divergence: no `node-cron`.** §1's table names it. The worker schedules in
+process with `scheduleDailyAt` in `apps/worker/src/index.ts` — which is what §1
+actually asked for, an in-process schedule with an explicit timezone rather than
+the host clock. `node-cron` is not in `pnpm-lock.yaml`, the step that would have
+introduced it was not allowed to run an install, and declaring a dependency that
+is not installed is worse than not declaring one.
 
 ### Step 8 — Inbox agent
 Gmail `users.watch` → Pub/Sub → webhook on the worker. Match sender to contact or create one with `source: 'inbound'`. Classify with Haiku into one of: `new_lead | interested | question | objection | not_interested | scheduling | invoice | spam | not_business`. Write an `interactions` row regardless of class.
@@ -455,10 +621,88 @@ The quiet handling matters as much as the loud handling. Twenty pings a day and 
 
 *Done when:* a real inbound reply lands as a classified task, and a rejection silently closes the contact.
 
+**State: written and tested; acceptance unmet, and this is the step furthest from
+being testable by hand.** Nothing Google-shaped exists: no GCP project, no OAuth
+client, no Pub/Sub topic, no push subscription. No inbound message has ever been
+classified. `STATUS.md` blockers 5 and 6 are the procedure.
+
+**Divergence 1: `GMAIL_REFRESH_TOKEN` needs a second scope.** §8's env list is
+unchanged in shape, but the token behind it is not: this step calls
+`users.watch`, `users.history.list` and `users.messages.get`, so the token must
+be reissued with `https://www.googleapis.com/auth/gmail.readonly` alongside
+`gmail.send`. A send-only token does not fail at startup — it fails on the first
+read, with a 403.
+
+**Divergence 2: two env vars this plan did not list.** `GMAIL_WEBHOOK_AUDIENCE`
+and `GMAIL_PUBSUB_SERVICE_ACCOUNT`, added to §8. §8 listed
+`GMAIL_WEBHOOK_SECRET` and stopped, and a shared secret in a query string is not
+sufficient authentication for a publicly-routable endpoint that triggers paid
+model calls. The route verifies the Pub/Sub OIDC token — issuer, audience and
+service-account email — *and* the shared secret.
+
+**Divergence 3: exactly-once is a database index, not application logic.** The
+claim rests entirely on the unique partial index from
+`20260803120000_inbox_dedupe_and_indexes`: the interaction row is inserted
+*before* Haiku is called, and a `23505` is read as "another delivery already
+claimed this message". Without the index there is no `23505` and the claim
+degrades silently to a read followed by a write. Recorded here because the
+property lives in a migration file rather than in the code that depends on it.
+
+**Divergence 4: replies are threaded without a new column.** `tasks` has no
+thread column and gets none. The send queue joins the inbound `interactions` row
+on `meta->>'task_id'` to recover `gmail_thread_id` and `rfc_message_id`, which
+step 8 already writes. If that read fails the message goes out unthreaded rather
+than being held: a reply in the wrong thread is a nuisance, a customer's answer
+stuck in a queue is not.
+
+**Divergence 5: `dormant` is a promotable stage.** The routing rules above do not
+say which stages a reply may promote *from*. `dormant` was initially excluded
+alongside `quoted` and `won` — wrongly. A dormant contact who writes back is the
+clearest possible signal of renewed interest, and leaving the stage alone left
+them on the 90-day dormant heartbeat despite having just made contact. The
+promotion also re-dates the contact; it is the one place in the system allowed to
+pull `next_touch_at` *inward*.
+
+**Divergence 6: the kill switch is checked after watch renewal.** §7 says the
+kill switch is checked "at the top of every cron job". For this job that is
+wrong: Gmail expires a watch after seven days and serves only about a week of
+history, so a pause that also stops renewing the watch and moving the cursor
+means unpausing silently begins with a gap of permanently lost mail. Watch
+renewal and cursor bootstrap now run first, and the switch is checked immediately
+after — before anything is read, classified or charged. One alert card is filed
+once the cursor has been sitting for four days, which is inside the week and
+leaves time to act.
+
 ### Step 9 — Edit-as-training-data
 When `final_body` differs from `draft_body`, feed the pair back as a style example on future drafts for that language. Storage exists from step 1; this step wires the loop.
 
 *Done when:* an edited draft measurably shifts the next draft's register in the same language.
+
+**State: written and tested; acceptance unmet, and the criterion as written
+cannot be met.** No draft exists, so no draft has been edited, so there are no
+pairs to feed back. Beyond that, "measurably shifts register" names no
+measurement and there is no metric in the code that could produce one. Read it as
+the honest thing it can be: after five or six real edits in a language, the owner
+reads the next draft in that language and says whether it moved toward him.
+That judgement is the acceptance test. It is subjective, and pretending otherwise
+would be worse.
+
+**Divergence: examples go in the uncached per-contact block, never in the brain
+prefix.** §2 puts the whole brain behind a `cache_control` breakpoint at the end
+of `system[0]`, which pays for itself only while that prefix is byte-identical
+across a run. Style examples are language-scoped and a morning run mixes
+languages, so putting them in `system[0]` would invalidate the cache on every
+switch and silently undo §2's saving — with no error and nothing in the output to
+notice. They live in `system[1]`.
+
+**A data flow that was reviewed and deliberately left alone.** This step puts one
+contact's message text into another contact's prompt. That text is the
+*operator's own outbound writing*, held by the operator, processed on the
+operator's account, to write the operator's next message: one controller, one
+purpose, no third party. Redacting it would remove the signal — register and
+sentence shape do not survive noun removal — so the alternative is not a safer
+feature but no feature. If this ever must change, the exit is to scope examples
+by `tasks.agent` or by contact. Never to redact.
 
 **v1 ends here.** No finance, content, trends, design, or legal agents until 50+ contacts are in the database and the daily loop is genuinely in use.
 
@@ -512,6 +756,33 @@ All of these live in `packages/core/guardrails.ts` and are called from the send 
 | Retry once then alert | In the LLM wrapper and the job runner. An error never disappears silently. |
 | Dry run | `DRY_RUN=true` default in development. Agents run, tasks are created, Gmail send is stubbed and logged. |
 
+**Amendment (found reviewing step 6). The first row overstates what was built,
+and the gap is worth naming precisely.** `sendEmail` does take a `taskId` — and
+uses it only in its log lines. It never touches the database. The re-read, the
+`do_not_contact` check, the suppression tag, the autonomy level and both rate
+limits all live in `assertSendAllowed` in `guardrails.ts`, which is a **separate
+function the caller has to remember to call**, and `@agency/core/gmail` is a
+published subpath.
+
+It is built that way because moving the re-read into the send function would make
+`packages/core/gmail` import the service-role Supabase client, which is exactly
+the coupling the barrel rule exists to prevent — and because the decision half is
+pure and unit-testable while the I/O half is not.
+
+The cost is real: **"no exceptions, no quick send path" now holds by discipline,
+not by construction.** There is one caller today and it calls `assertSendAllowed`
+first. A future "send now" button that imports `sendEmail` directly would mail a
+customer with no approved task, no opt-out check and no rate limit. The header of
+`packages/core/src/gmail.ts` states this at the call site, which is the only place
+it can actually stop somebody.
+
+**Amendment: `daily_send_cap: 0` means paused, and says so.** A cap of 0 used to
+produce "the cap has been reached, it will retry tomorrow", which is a promise
+the code cannot keep — tomorrow's cap is also 0. It now says sending is paused
+and names `/brain`. This matters because a cap of 0 is the recommended way to
+bring the webhook up with nothing able to leave (see §6 step 8 and the `DRY_RUN`
+note in `STATUS.md`).
+
 **Autonomy ladder:** built now, locked at level 1. Nothing leaves the system to a third party above level 1 in v1. After 20 approvals of a task type with no edit, the UI surfaces a promotion prompt to level 2 — the prompt is built, the promotion is not enabled.
 
 ---
@@ -529,6 +800,17 @@ For Greek contacts this is almost always "in the next few minutes" — the owner
 Deliberately *not* an optimisation agent. The send-time literature is bulk-marketing data, the studies contradict each other on which days win, and the honest ones concede that timing never rescues a bad email. Revisit in six months when `interactions` holds enough real reply data to measure something; until then a fixed rule captures nearly all the value at zero cost.
 
 `timezone` is derived from `country`/`city` on contact creation and defaults to `Europe/Athens`.
+
+**Amendment (step 8). The window is per-agent: an inbox reply keeps the hours and
+drops the days.** Everything argued above is about *outbound* mail nobody asked
+for — the reason a fixed rule is enough is that the recipient is not waiting.
+A reply is the opposite case. Applied unchanged, the Tue–Thu window answers a
+question asked on Thursday evening on the following Tuesday: five days, visibly
+("Sends Tuesday from 09:00."), with no override anywhere in the code.
+`windowForAgent` keeps the configured `start_hour`/`end_hour` for
+`agent = 'inbox'` — 03:00 still reads as a machine, and that argument survives —
+and drops the day restriction. This plan never decided it; step 8 inherited it.
+It is decided now.
 
 ### Deliverability ramp — how much leaves per day
 
@@ -573,8 +855,10 @@ ANTHROPIC_API_KEY=
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GMAIL_REFRESH_TOKEN=
-GMAIL_PUBSUB_TOPIC=
+GMAIL_PUBSUB_TOPIC=             # full resource name: projects/<project-id>/topics/<topic>
 GMAIL_WEBHOOK_SECRET=
+GMAIL_WEBHOOK_AUDIENCE=         # ADDED (step 8): must equal the subscription's OIDC audience
+GMAIL_PUBSUB_SERVICE_ACCOUNT=   # ADDED (step 8): the email claim in the subscription's OIDC token
 
 # Web Push
 VAPID_PUBLIC_KEY=
@@ -590,6 +874,21 @@ DRY_RUN=true                    # default true in development
 TZ=Europe/Athens
 ```
 
+`GMAIL_REFRESH_TOKEN` must carry **both** `gmail.send` and
+`https://www.googleapis.com/auth/gmail.readonly` from step 8 onward. A send-only
+token starts fine and fails on the first mailbox read. See §6 step 8.
+
+**`DRY_RUN` stays one flag, deliberately.** It gates `users.watch`, the Gmail
+send and Web Push together, which means the webhook path cannot be brought up
+without also arming real outbound mail. Splitting it into `DRY_RUN_WATCH` and
+`DRY_RUN_SEND` was proposed and rejected: the watch stub exists for a stated
+reason — there is one Gmail account, so a dev machine registering a watch
+*diverts the production mailbox's notifications* — and a second flag is new
+config surface for a problem that already has two answers. `daily_send_cap: 0`
+(§7) or the kill switch (§6 step 8, now watch-safe) both bring the webhook up
+with nothing able to leave. The procedure is written into `README.md` instead of
+coded around.
+
 ---
 
 ## 9. Open questions for the owner
@@ -597,6 +896,15 @@ TZ=Europe/Athens
 None block step 1. Answer them before the step they gate.
 
 1. **Gmail Pub/Sub topic** (gates step 8) — needs a Google Cloud project with Pub/Sub enabled. Worth setting up early; the OAuth consent screen can take a day to sort out.
+
+   **Still open, and now written up.** This one line was the entire guidance and
+   it was not enough — it omits the topic's required resource-name format, the
+   `roles/pubsub.publisher` grant to `gmail-api-push@system.gserviceaccount.com`
+   (whose absence produces a 403 that looks like a scope problem), the push
+   subscription's OIDC audience and service account, and the `gmail.readonly`
+   scope. `README.md` §"Bringing the mailbox up" is the procedure. It was written
+   from the code rather than from experience and has never been followed, so
+   expect it to be wrong somewhere the first time.
 2. **Brain content** (gates step 5) — now lives in `brain/*.md`, one file per key, edited as plain text and loaded with `pnpm seed`. See `brain/README.md`. The follow-up agent drafts *entirely* from `brain`. `services`, `positioning`, `pricing` and the two `tone_of_voice` entries are the highest-leverage text in the system; they are effectively the agent's model of what the business sells and how it talks.
 
    Two specifics settled in discussion, still to be written up:
@@ -605,4 +913,6 @@ None block step 1. Answer them before the step they gate.
 
    This text has to be the owner's own words.
 3. **CSV shape** (gates step 1) — whatever the existing contacts live in now. Column mapping is written once the file exists.
-4. **Physical business address** (gates step 6) — required in the compliance footer of every outbound email. Registered address is fine.
+4. **Physical business address** (gates step 6) — required in the compliance footer of every outbound email. Registered address is fine. **Still open.** `BUSINESS_NAME`, `BUSINESS_ADDRESS` and `PRIVACY_POLICY_URL` are all unset; the send function refuses without them, dry run included. The privacy URL also has to resolve to a page that is actually published somewhere, and nothing decides where that page is hosted.
+
+5. **The sending domain** (gates the first live send, added after step 6) — SPF, DKIM and DMARC must be configured and verified live. §7.1 calls this non-negotiable and never says on which domain. No domain has been chosen. This is the one blocker that cannot be undone by fixing it later: mail that lands in spam teaches Gmail that mail from this domain belongs in spam, which is precisely what the `daily_send_cap` ramp exists to avoid buying.
