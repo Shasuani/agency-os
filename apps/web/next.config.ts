@@ -21,12 +21,27 @@ import type { NextConfig } from 'next';
  *
  * Mirror this in production: never set `SUPABASE_SERVICE_ROLE_KEY` (or any of
  * the other four) on the Vercel project. They belong to the Railway worker.
+ *
+ * `VAPID_PUBLIC_KEY` is the fifth name and the only one that is deliberately
+ * shared with the worker, because it is a public key: the browser needs it to
+ * create a push subscription (step 7), and a value that ships to every visitor
+ * of /brain cannot be leaked by being in this process. It is read server-side by
+ * app/(app)/brain/page.tsx and passed to the toggle as a prop rather than being
+ * renamed `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, which would be a second name for the
+ * same secret-free value plus a new entry in `ENV_VARS` and a new static read in
+ * env.ts. Without this line the key is `undefined` in local development and the
+ * toggle renders its "not configured" state forever.
+ *
+ * `VAPID_PRIVATE_KEY` is the other half of that pair and is **not** here, and
+ * must never be set on the Vercel project. It signs the pushes; the worker is
+ * the only thing that sends them.
  */
 const WEB_ENV_ALLOWLIST: ReadonlySet<string> = new Set([
   'NEXT_PUBLIC_SUPABASE_URL',
   'NEXT_PUBLIC_SUPABASE_ANON_KEY',
   'ALLOWED_EMAIL',
   'TZ',
+  'VAPID_PUBLIC_KEY',
 ]);
 
 /**
