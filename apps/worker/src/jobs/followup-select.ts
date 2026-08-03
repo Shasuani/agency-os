@@ -47,10 +47,11 @@
  * never reaches `nextTouch`.
  */
 
-import { DORMANT_DAYS } from '@agency/core/cadence';
+import { DORMANT_DAYS, nextTouch } from '@agency/core/cadence';
 import type { CadenceResult } from '@agency/core/cadence';
 import type { Contact, Interaction } from '@agency/core';
 import type { SystemBlock } from '@agency/core/llm';
+import { partsInZone, zonedTimeToUtc } from '@agency/core/zone';
 
 // The word limit is asked for in the prompt and checked here; it must be one
 // number, not two. `followup-prompt.ts` owns it because that is where it is
@@ -129,68 +130,23 @@ export const MIN_PUSH_OUT_DAYS = 3;
 export const MAX_PUSH_OUT_DAYS = 90;
 
 // ---------------------------------------------------------------------------
-// Timezone arithmetic — no dependency, no library
+// Timezone arithmetic
 // ---------------------------------------------------------------------------
 //
-// Deliberately duplicated from `apps/web/lib/validation.ts` (see FOLLOWUP_HOUR
-// above for why it cannot be imported). Step for step the same functions; if one
-// changes, both must.
+// This module used to carry a private copy of `partsInZone`, `zoneOffsetMs` and
+// `zonedTimeToUtc`, with a comment saying it was duplicated from
+// `apps/web/lib/validation.ts` and that if one changed both must. Step 6 needed
+// the same arithmetic a third time, from both apps, so it now lives once in
+// `packages/core/src/zone.ts` and all three callers import it. The functions
+// there are step for step what was here — the same two-pass offset resolution,
+// the same hour-24 correction — so this is a move, not a rewrite, and the DST
+// cases in `followup-select.test.ts` are what proves it.
+//
+// `zonedTimeToUtc` is re-exported because `src/index.ts` schedules the daily run
+// through it and importing it from the job that defines the hour keeps those two
+// facts next to each other.
 
-function partsInZone(instant: Date, timeZone: string): Record<string, number> {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-
-  const out: Record<string, number> = {};
-  for (const part of formatter.formatToParts(instant)) {
-    if (part.type === 'literal') continue;
-    const value = Number(part.value);
-    out[part.type] = Number.isFinite(value) ? value : 0;
-  }
-  // Some ICU versions render midnight as hour 24.
-  if (out['hour'] === 24) out['hour'] = 0;
-  return out;
-}
-
-function zoneOffsetMs(instant: Date, timeZone: string): number {
-  const p = partsInZone(instant, timeZone);
-  const asUtc = Date.UTC(
-    p['year'] ?? 1970,
-    (p['month'] ?? 1) - 1,
-    p['day'] ?? 1,
-    p['hour'] ?? 0,
-    p['minute'] ?? 0,
-    p['second'] ?? 0,
-  );
-  return asUtc - instant.getTime();
-}
-
-/**
- * Wall-clock time in a timezone → the UTC instant. Two passes: guess with the
- * offset at the naive instant, then re-measure at the guess. Settles every case
- * except the hour that does not exist under a DST jump, which lands on the hour
- * after it.
- */
-export function zonedTimeToUtc(
-  year: number,
-  month: number,
-  day: number,
-  hour: number,
-  minute: number,
-  timeZone: string,
-): Date {
-  const naive = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
-  const firstPass = naive - zoneOffsetMs(new Date(naive), timeZone);
-  const secondPass = naive - zoneOffsetMs(new Date(firstPass), timeZone);
-  return new Date(secondPass);
-}
+export { zonedTimeToUtc };
 
 /**
  * `days` calendar days after `from`, at `FOLLOWUP_HOUR` local time.
@@ -205,9 +161,7 @@ export function atFollowupHour(from: Date, days: number, timeZone: string): Date
   const p = partsInZone(from, timeZone);
   // Date.UTC normalises the rollover: day 30 + 5 becomes the 4th of next month,
   // including across a year boundary.
-  const shifted = new Date(
-    Date.UTC((p['year'] ?? 1970), (p['month'] ?? 1) - 1, (p['day'] ?? 1) + days),
-  );
+  const shifted = new Date(Date.UTC(p.year, p.month - 1, p.day + days));
   return zonedTimeToUtc(
     shifted.getUTCFullYear(),
     shifted.getUTCMonth() + 1,
@@ -571,6 +525,90 @@ export function planPushOut(
       ? `Skipped; the agent asked to look again in ${days} days.`
       : `Skipped; next look in ${days} days (cadence default — the agent's ` +
         `suggestion of ${String(suggestedDays)} was outside ${MIN_PUSH_OUT_DAYS}–${MAX_PUSH_OUT_DAYS}).`,
+  };
+}
+
+/**
+ * Re-anchor `next_touch_at` on the message that actually left.
+ *
+ * ---------------------------------------------------------------------------
+ * The bug this exists to close, because it is not obvious from either end
+ * ---------------------------------------------------------------------------
+ *
+ * `followup.ts` writes `next_touch_at = draft time + cadence.days` on the draft
+ * branch, and it has to: a card left unapproved for three days would otherwise
+ * breed a duplicate every morning. But the interval it uses is the one derived
+ * from the touches that had *already* happened — for a `contacted` lead with
+ * one outreach on file that is step 0, +3 — and the draft it is filing is the
+ * touch that moves them to step 1, +7. Nothing anywhere re-computed the date
+ * once the message left, so the schedule collapsed in two separate ways:
+ *
+ *   - Even with same-morning approval, chase 2 was drafted three days after
+ *     chase 1 rather than seven. Every interval in SPEC §4's table was being
+ *     served one step early, permanently.
+ *   - When the approval delay exceeded the interval — an approval on Thursday
+ *     that the seeded `[2,3,4]` send window schedules for the following Tuesday
+ *     — the contact came due before the message had even gone out, so the next
+ *     chase was drafted the morning after the previous one landed.
+ *
+ * The interval in the table is measured from the touch, so it has to be
+ * computed from the touch. That is what this does, at the one point in the
+ * system that knows a message really left.
+ *
+ * ---------------------------------------------------------------------------
+ * Three deliberate limits
+ * ---------------------------------------------------------------------------
+ *
+ * **Only `schedule`.** A `dormant` or `stop` result is a *stage* decision, and
+ * moving a contact between stages is the follow-up agent's job — it owns the
+ * `contacts.stage` write and the alert that goes with it. Returning null leaves
+ * the existing date in place, the agent reaches the contact on it, and it makes
+ * the same decision it would have made anyway. Nothing is lost but a few days.
+ *
+ * **Never earlier than the date already stored.** This runs after a send, and a
+ * send can happen days after the draft; the stored date may already have been
+ * pushed further out by `inbox.ts`'s `pushNextTouch` because the contact wrote
+ * back in the meantime. Pulling a date in is how a live conversation gets a
+ * cold nudge on top of it. Pushing it out is always safe.
+ *
+ * **The interactions passed in must already include the row just written.** The
+ * count is what makes the step advance; deriving it from a snapshot taken
+ * before the send would reproduce the bug this function is closing.
+ */
+export function planNextTouchAfterSend(input: {
+  contact: Pick<Contact, 'stage' | 'source' | 'tags' | 'touch_count' | 'stage_changed_at' | 'next_touch_at'>;
+  /** Including the outbound row for the message that just went out. */
+  interactions: readonly Pick<Interaction, 'direction' | 'occurred_at'>[];
+  sentAt: Date;
+  timeZone: string;
+}): { at: Date; days: number; reason: string } | null {
+  const stage = input.contact.stage;
+  if (stage === null) return null;
+
+  const touch = deriveStageTouchCount({
+    contact: input.contact,
+    interactions: input.interactions,
+  });
+
+  const cadence = nextTouch({
+    stage,
+    touchCount: touch.touchCount,
+    source: input.contact.source,
+    tags: input.contact.tags,
+  });
+
+  if (cadence.kind !== 'schedule') return null;
+
+  const at = atFollowupHour(input.sentAt, cadence.days, input.timeZone);
+
+  const currentRaw = input.contact.next_touch_at;
+  const current = typeof currentRaw === 'string' ? new Date(currentRaw).getTime() : Number.NaN;
+  if (!Number.isNaN(current) && current >= at.getTime()) return null;
+
+  return {
+    at,
+    days: cadence.days,
+    reason: `Next touch re-anchored to the message that left: +${cadence.days} days. ${cadence.reason}`,
   };
 }
 

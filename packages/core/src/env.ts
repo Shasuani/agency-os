@@ -30,6 +30,8 @@ export const ENV_VARS = [
   'GMAIL_REFRESH_TOKEN',
   'GMAIL_PUBSUB_TOPIC',
   'GMAIL_WEBHOOK_SECRET',
+  'GMAIL_WEBHOOK_AUDIENCE',
+  'GMAIL_PUBSUB_SERVICE_ACCOUNT',
   // Web Push
   'VAPID_PUBLIC_KEY',
   'VAPID_PRIVATE_KEY',
@@ -91,6 +93,8 @@ function readAll(): Record<EnvVar, string | undefined> {
     GMAIL_REFRESH_TOKEN: env['GMAIL_REFRESH_TOKEN'],
     GMAIL_PUBSUB_TOPIC: env['GMAIL_PUBSUB_TOPIC'],
     GMAIL_WEBHOOK_SECRET: env['GMAIL_WEBHOOK_SECRET'],
+    GMAIL_WEBHOOK_AUDIENCE: env['GMAIL_WEBHOOK_AUDIENCE'],
+    GMAIL_PUBSUB_SERVICE_ACCOUNT: env['GMAIL_PUBSUB_SERVICE_ACCOUNT'],
     VAPID_PUBLIC_KEY: env['VAPID_PUBLIC_KEY'],
     VAPID_PRIVATE_KEY: env['VAPID_PRIVATE_KEY'],
     BUSINESS_NAME: env['BUSINESS_NAME'],
@@ -184,6 +188,52 @@ export function gmailEnv(): {
     refreshToken: requireEnv('GMAIL_REFRESH_TOKEN'),
     pubsubTopic: requireEnv('GMAIL_PUBSUB_TOPIC'),
     webhookSecret: requireEnv('GMAIL_WEBHOOK_SECRET'),
+  };
+}
+
+/**
+ * The three variables the Gmail Pub/Sub webhook route needs, and the one
+ * accessor in this file that reports rather than throws.
+ *
+ * Every other grouped accessor asserts, because every other caller is code that
+ * has already decided to do the thing and cannot proceed without the value. The
+ * webhook is different: "not configured" is a state it is *designed* to be in.
+ * The route ships refusing everything with a `503` — an open webhook that
+ * creates contacts and spends Anthropic money is not a thing that turns itself
+ * on — and a machine with no Gmail setup is the machine this is built on. So
+ * being unconfigured has to be an answer the route can act on, once per process,
+ * not an exception thrown on every one of the deliveries Pub/Sub will retry with
+ * backoff for days.
+ *
+ * `missing` names the variables rather than describing them, so the single log
+ * line the route emits says which of the three to go and set. Values never
+ * appear in it; two of these three are secrets.
+ *
+ * `GMAIL_WEBHOOK_AUDIENCE` and `GMAIL_PUBSUB_SERVICE_ACCOUNT` are separate from
+ * `gmailEnv()` on purpose: `gmailEnv()` is about talking to Gmail, and these two
+ * are about deciding whether a caller claiming to be Google actually is. Without
+ * the audience check, a Google-signed token minted for any other service
+ * verifies; without the service-account check, any Google account holder with
+ * the right audience passes. Neither is optional and neither belongs to the send
+ * path.
+ */
+export function gmailWebhookEnv():
+  | { ok: true; secret: string; audience: string; serviceAccount: string }
+  | { ok: false; missing: readonly EnvVar[] } {
+  const names = [
+    'GMAIL_WEBHOOK_SECRET',
+    'GMAIL_WEBHOOK_AUDIENCE',
+    'GMAIL_PUBSUB_SERVICE_ACCOUNT',
+  ] as const;
+
+  const missing = names.filter((name) => optionalEnv(name) === undefined);
+  if (missing.length > 0) return { ok: false, missing };
+
+  return {
+    ok: true,
+    secret: requireEnv('GMAIL_WEBHOOK_SECRET'),
+    audience: requireEnv('GMAIL_WEBHOOK_AUDIENCE'),
+    serviceAccount: requireEnv('GMAIL_PUBSUB_SERVICE_ACCOUNT'),
   };
 }
 

@@ -35,18 +35,13 @@
  */
 
 import Link from 'next/link';
-import {
-  useActionState,
-  useEffect,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from 'react';
+import { useActionState, useEffect, useState, type KeyboardEvent } from 'react';
 
 import { Button, buttonClass, cx } from '@/components/ui/button';
 import { CheckboxField, Field, fieldId } from '@/components/ui/field';
 import { Input, Textarea } from '@/components/ui/input';
 import { Kbd } from '@/components/ui/kbd';
+import { Panel } from '@/components/ui/panel';
 import { Select, type SelectOption } from '@/components/ui/select';
 import { STAGE_OPTIONS, SUGGESTED_TAGS } from '@/lib/contact-vocab';
 import type { ContactField, FieldErrors } from '@/lib/validation';
@@ -270,7 +265,7 @@ export function ContactForm({
         </div>
       </Panel>
 
-      <Panel title="Where they came from" hint="Country sets the send window">
+      <Panel title="Where they came from" note="Country sets the send window">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Field name="source" label="Source" error={errors?.source}>
             <Select
@@ -339,7 +334,7 @@ export function ContactForm({
         </div>
       </Panel>
 
-      <Panel title="When to chase them" hint="The agent takes this over in step 5">
+      <Panel title="When to chase them" note="The agent takes this over in step 5">
         <NextTouchField
           today={today}
           defaultValue={initialValues.next_touch_at}
@@ -353,7 +348,7 @@ export function ContactForm({
         />
       </Panel>
 
-      <Panel title="Context" hint="The follow-up agent reads this from step 5">
+      <Panel title="Context" note="The follow-up agent reads this from step 5">
         <Field
           name="tags"
           label="Tags"
@@ -428,26 +423,6 @@ export function ContactForm({
 // ---------------------------------------------------------------------------
 // Pieces
 // ---------------------------------------------------------------------------
-
-function Panel({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="rounded-lg border border-line bg-raised">
-      <div className="flex items-baseline justify-between gap-3 border-b border-line px-4 py-2">
-        <h2 className="label-caps text-muted">{title}</h2>
-        {hint !== undefined ? <span className="text-xs text-faint">{hint}</span> : null}
-      </div>
-      <div className="p-4">{children}</div>
-    </section>
-  );
-}
 
 /**
  * `do_not_contact`.

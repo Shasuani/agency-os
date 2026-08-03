@@ -26,6 +26,7 @@ import {
   clampPushOutDays,
   deriveStageTouchCount,
   hasEmailAddress,
+  planNextTouchAfterSend,
 } from './followup-select';
 
 const TZ = 'Europe/Athens';
@@ -206,5 +207,142 @@ describe('email presence — a follow-up with nowhere to send', () => {
     assert.equal(hasEmailAddress({ email: null }), false);
     assert.equal(hasEmailAddress({ email: '' }), false);
     assert.equal(hasEmailAddress({ email: '   ' }), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Re-anchoring the cadence on the send
+// ---------------------------------------------------------------------------
+
+describe('planNextTouchAfterSend — the interval is measured from the message', () => {
+  it('advances to the next interval, from the moment the message left', () => {
+    // The bug, and it did not need an approval delay to bite. At draft time a
+    // `contacted` lead with one outreach on file derives touchCount 0, so
+    // `followup.ts` wrote draft + 3. The draft it was filing is the touch that
+    // makes them step 1, whose interval is +7. So chase 2 was drafted three days
+    // after chase 1, and every interval in SPEC §4's table was served one step
+    // early, permanently and silently.
+    const sentAt = new Date('2026-08-10T09:00:00.000Z');
+    const plan = planNextTouchAfterSend({
+      contact: contact({
+        stage: 'contacted',
+        stage_changed_at: '2026-08-01T00:00:00.000Z',
+        next_touch_at: '2026-08-08T05:00:00.000Z',
+      }),
+      // Including the row just written: the outreach, then this send.
+      interactions: [
+        interaction({ occurred_at: '2026-08-03T09:00:00.000Z' }),
+        interaction({ occurred_at: sentAt.toISOString() }),
+      ],
+      sentAt,
+      timeZone: TZ,
+    });
+
+    assert.notEqual(plan, null);
+    assert.equal(plan?.days, 7);
+    assert.equal(plan?.at.getTime(), atFollowupHour(sentAt, 7, TZ).getTime());
+  });
+
+  it('closes the collapse when the approval waited longer than the interval', () => {
+    // Approve on Thursday, the seeded [2,3,4] window schedules for Tuesday, and
+    // `next_touch_at` was already Sunday. Without re-anchoring the contact is due
+    // before the message has even gone out, and the next chase is drafted the
+    // morning after the previous one landed.
+    const sentAt = new Date('2026-08-18T06:05:00.000Z');
+    const plan = planNextTouchAfterSend({
+      contact: contact({
+        stage: 'contacted',
+        stage_changed_at: '2026-08-01T00:00:00.000Z',
+        next_touch_at: '2026-08-16T05:00:00.000Z', // already in the past at send time
+      }),
+      interactions: [
+        interaction({ occurred_at: '2026-08-03T09:00:00.000Z' }),
+        interaction({ occurred_at: sentAt.toISOString() }),
+      ],
+      sentAt,
+      timeZone: TZ,
+    });
+
+    assert.ok(plan !== null);
+    assert.ok(plan.at.getTime() > sentAt.getTime());
+  });
+
+  it('never pulls a date in', () => {
+    // A send can land days after the draft, and the stored date may have been
+    // pushed further out in the meantime — by `inbox.ts` because the contact
+    // wrote back, or by the operator. Pulling in is how a live conversation gets
+    // a cold nudge on top of it.
+    const sentAt = new Date('2026-08-10T09:00:00.000Z');
+    const plan = planNextTouchAfterSend({
+      contact: contact({
+        stage: 'contacted',
+        stage_changed_at: '2026-08-01T00:00:00.000Z',
+        next_touch_at: '2026-12-01T05:00:00.000Z',
+      }),
+      interactions: [
+        interaction({ occurred_at: '2026-08-03T09:00:00.000Z' }),
+        interaction({ occurred_at: sentAt.toISOString() }),
+      ],
+      sentAt,
+      timeZone: TZ,
+    });
+
+    assert.equal(plan, null);
+  });
+
+  it('leaves a stage decision to the follow-up agent', () => {
+    // Four unanswered touches is `dormant`, and dormant is a stage change with an
+    // alert and a `contacts.stage` write behind it. The send queue owns none of
+    // that, so it returns null, the existing date stands, and the morning run
+    // makes the same decision it would have made anyway.
+    const sentAt = new Date('2026-08-10T09:00:00.000Z');
+    const outbound = ['2026-08-01', '2026-08-03', '2026-08-06', '2026-08-10'].map((day) =>
+      interaction({ occurred_at: `${day}T09:00:00.000Z` }),
+    );
+
+    const plan = planNextTouchAfterSend({
+      contact: contact({
+        stage: 'contacted',
+        stage_changed_at: '2026-07-30T00:00:00.000Z',
+        next_touch_at: '2026-08-12T05:00:00.000Z',
+      }),
+      interactions: outbound,
+      sentAt,
+      timeZone: TZ,
+    });
+
+    assert.equal(plan, null);
+  });
+
+  it('does nothing for a contact with no stage', () => {
+    // `screenContact` files an alert for that row. The send queue is not the
+    // place to have an opinion about it.
+    const sentAt = new Date('2026-08-10T09:00:00.000Z');
+    const plan = planNextTouchAfterSend({
+      contact: contact({ stage: null, next_touch_at: null }),
+      interactions: [interaction({ occurred_at: sentAt.toISOString() })],
+      sentAt,
+      timeZone: TZ,
+    });
+
+    assert.equal(plan, null);
+  });
+
+  it('schedules from a null next_touch_at rather than refusing', () => {
+    // A contact whose date was cleared and who is then sent to by hand still
+    // needs a next touch; "no date" is not "further out than the new one".
+    const sentAt = new Date('2026-08-10T09:00:00.000Z');
+    const plan = planNextTouchAfterSend({
+      contact: contact({
+        stage: 'contacted',
+        stage_changed_at: '2026-08-01T00:00:00.000Z',
+        next_touch_at: null,
+      }),
+      interactions: [interaction({ occurred_at: sentAt.toISOString() })],
+      sentAt,
+      timeZone: TZ,
+    });
+
+    assert.equal(plan?.days, 3);
   });
 });

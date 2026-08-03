@@ -37,7 +37,13 @@ import { updateContact } from '@/lib/contact-actions';
 import { getContact } from '@/lib/contacts';
 import { daysBetween, formatDay, pastLabel, yearOf } from '@/lib/day';
 import { requireOperator } from '@/lib/supabase/server';
-import { LANGUAGE_OPTIONS, SOURCE_OPTIONS, dayKeyInZone } from '@/lib/validation';
+import {
+  LANGUAGE_OPTIONS,
+  SOURCE_OPTIONS,
+  contactLine,
+  dayKeyInZone,
+  dayKeyOf,
+} from '@/lib/validation';
 
 export const metadata: Metadata = { title: 'Contact' };
 
@@ -66,7 +72,9 @@ export default async function ContactPage({ params }: { params: Promise<{ id: st
     value_estimate: contact.value_estimate === null ? '' : String(contact.value_estimate),
     notes: contact.notes ?? '',
     tags: formatTags(contact.tags),
-    next_touch_at: toDayKey(contact.next_touch_at, timeZone),
+    // '' rather than null: this is a `<input type="date">` value, and React
+    // treats null as uncontrolled.
+    next_touch_at: dayKeyOf(contact.next_touch_at, timeZone) ?? '',
     do_not_contact: contact.do_not_contact ?? false,
   };
 
@@ -79,10 +87,13 @@ export default async function ContactPage({ params }: { params: Promise<{ id: st
     return { errors: result.errors };
   }
 
-  // `name`, falling back to `business` — one of the two is guaranteed by
-  // validation, and an older imported row with neither still gets a heading.
-  const heading = contact.name ?? contact.business ?? 'Unnamed contact';
-  const subheading = contact.name !== null ? contact.business : null;
+  // One of name/business is guaranteed by validation, and an older imported row
+  // with neither still gets a heading. The rule is in lib/contact-vocab.ts;
+  // this page, /pipeline's table and the Today card all had their own copy.
+  const { primary: heading, secondary: subheading } = contactLine(
+    contact.name,
+    contact.business,
+  );
 
   const added = formatStamp(contact.created_at, timeZone, today);
   const lastTouch = formatStamp(contact.last_touch_at, timeZone, today);
@@ -177,21 +188,13 @@ function Fact({
 // "yesterday" is a day, not 24 hours. The formatting itself is lib/day.ts.
 // ---------------------------------------------------------------------------
 
-/** A stored timestamp as the 'YYYY-MM-DD' it reads as in `timeZone`, or ''. */
-function toDayKey(iso: string | null, timeZone: string): string {
-  if (iso === null) return '';
-  const instant = new Date(iso);
-  if (Number.isNaN(instant.getTime())) return '';
-  return dayKeyInZone(instant, timeZone);
-}
-
 function formatStamp(
   iso: string | null,
   timeZone: string,
   today: string,
 ): { date: string; relative: string } | null {
-  const day = toDayKey(iso, timeZone);
-  if (day === '') return null;
+  const day = dayKeyOf(iso, timeZone);
+  if (day === null) return null;
 
   const offset = daysBetween(today, day);
 

@@ -26,6 +26,7 @@
 
 import { appTimezone } from '@agency/core';
 import type { ContactInsert, Language, Source, Stage } from '@agency/core';
+import { dayKeyInZone, zonedTimeToUtc } from '@agency/core/zone';
 
 import {
   CONTACT_LANGUAGES,
@@ -143,84 +144,57 @@ export function fail(errors: FieldErrors): { ok: false; errors: FieldErrors } {
 }
 
 // ---------------------------------------------------------------------------
-// Timezone helpers — no dependency, no library
+// Timezone helpers
 // ---------------------------------------------------------------------------
 
 /**
  * A date-only follow-up ("chase them on the 12th") is stored as 08:00 in the
  * operator's timezone: the hour the follow-up agent runs (SPEC §4), so a date
  * picked in the UI is due on that morning's run and not a day later.
+ *
+ * Still declared twice — the other copy is `FOLLOWUP_HOUR` in
+ * `apps/worker/src/jobs/followup-select.ts`, and the two must stay the same 8 or
+ * half the pipeline silently slips a day. Now that `@agency/core` exists as a
+ * home for it, converging the constant is a cadence change with the follow-up
+ * selector's tests behind it, and is recorded as such rather than smuggled into
+ * an integration pass.
  */
 export const FOLLOWUP_HOUR = 8;
 
-function partsInZone(instant: Date, timeZone: string): Record<string, number> {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-
-  const out: Record<string, number> = {};
-  for (const part of formatter.formatToParts(instant)) {
-    if (part.type === 'literal') continue;
-    const value = Number(part.value);
-    out[part.type] = Number.isFinite(value) ? value : 0;
-  }
-  // Some ICU versions render midnight as hour 24.
-  if (out['hour'] === 24) out['hour'] = 0;
-  return out;
-}
-
-/** Offset of `timeZone` from UTC at `instant`, in milliseconds. */
-function zoneOffsetMs(instant: Date, timeZone: string): number {
-  const p = partsInZone(instant, timeZone);
-  const asUtc = Date.UTC(
-    p['year'] ?? 1970,
-    (p['month'] ?? 1) - 1,
-    p['day'] ?? 1,
-    p['hour'] ?? 0,
-    p['minute'] ?? 0,
-    p['second'] ?? 0,
-  );
-  return asUtc - instant.getTime();
-}
-
 /**
- * Wall-clock time in a timezone → the UTC instant, without pulling in a date
- * library. Guess using the offset at the naive instant, then re-measure the
- * offset at the guess: two passes settle every case except the one hour a year
- * that does not exist under DST, where it lands on the hour after the jump.
- */
-export function zonedTimeToUtc(
-  year: number,
-  month: number,
-  day: number,
-  hour: number,
-  minute: number,
-  timeZone: string,
-): Date {
-  const naive = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
-  const firstPass = naive - zoneOffsetMs(new Date(naive), timeZone);
-  const secondPass = naive - zoneOffsetMs(new Date(firstPass), timeZone);
-  return new Date(secondPass);
-}
-
-/**
- * `'YYYY-MM-DD'` for an instant, as seen in `timeZone`.
+ * The timezone arithmetic itself now lives once, in `@agency/core/zone`.
  *
- * The one place in apps/web where a timezone is resolved. Everything downstream
- * — lib/day.ts and every screen — works on these strings, which carry no zone
- * and no clock.
+ * It used to be a private copy here and another in the worker's follow-up
+ * selector, each with a header saying the other existed and had to be kept in
+ * step. Step 6 needed it a third time — the send window, from both apps — so the
+ * shared module was written and the two copies were deleted into it. The
+ * functions are step for step what was here: the same two-pass offset
+ * resolution, the same hour-24 correction, the same `'YYYY-MM-DD'` output.
+ *
+ * They are re-exported rather than left for callers to import directly because
+ * every screen in this app already reaches for `dayKeyInZone` from here, and
+ * because this is the module whose job is to say what a timezone means in
+ * apps/web. `@agency/core/zone` is a leaf with no imports at all, so nothing
+ * about routing it through this (server-only) module makes it heavier.
  */
-export function dayKeyInZone(instant: Date, timeZone: string): string {
-  const p = partsInZone(instant, timeZone);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${p['year'] ?? 1970}-${pad(p['month'] ?? 1)}-${pad(p['day'] ?? 1)}`;
+export { dayKeyInZone, zonedTimeToUtc } from '@agency/core/zone';
+
+/**
+ * A stored `timestamptz` → the calendar day it falls on in the operator's zone,
+ * or null when the column is empty or holds something unparseable.
+ *
+ * Every screen wants exactly this and three of them had written it out privately
+ * — `/pipeline`'s `toDayKey`, Today's `dayOf`, and the nav's run stamp. The null
+ * cases are the reason it is worth one function: `new Date(null!)` is an invalid
+ * Date, `dayKeyInZone` on an invalid Date returns `'NaN-NaN-NaN'`, and that
+ * string sorts and compares perfectly happily against a real day key. A screen
+ * would render "3 days overdue" about nothing at all.
+ */
+export function dayKeyOf(iso: string | null, timeZone: string): string | null {
+  if (iso === null) return null;
+  const instant = new Date(iso);
+  if (Number.isNaN(instant.getTime())) return null;
+  return dayKeyInZone(instant, timeZone);
 }
 
 /**
@@ -630,6 +604,8 @@ export {
   MAX_TAGS,
   MAX_TAG_LENGTH,
   SUGGESTED_TAGS,
+  blankToNull,
+  contactLine,
   formatTags,
   isLanguage,
   isSource,

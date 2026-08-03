@@ -4,17 +4,20 @@
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
+  "//test": "`find`, not a glob. pnpm runs scripts under sh, where `**` is `*` — so the old `src/**/*.test.ts` expanded to `src/*/*.test.ts` and any test file at another depth was silently never run, which is the worst kind of green. A quoted glob would push the expansion into the test runner, but that only works on Node 22+; on Node 20 the runner prints 'Could not find' and exits 0, which is the same silent pass again. `find` gives the same answer on both. `sort` so the order is stable between machines.",
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
     "start": "tsx --env-file-if-exists=../../.env src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test $(find src -name '*.test.ts' | sort)"
   },
   "dependencies": {
-    "@agency/core": "workspace:*"
+    "@agency/core": "workspace:*",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@types/web-push": "^3.6.4",
     "tsx": "^4.20.0",
     "typescript": "^5.8.0"
   },

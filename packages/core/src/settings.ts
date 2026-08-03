@@ -6,13 +6,48 @@
  * business facts fed to the LLM, and operational flags must never leak into a
  * prompt.
  *
- * Exactly five keys exist. Adding a sixth means editing PLAN.md first.
+ * Five keys are typed here, and adding a sixth to `SettingsMap` means editing
+ * PLAN.md first:
  *
  *   kill_switch     false
  *   autonomy        {"draft_email": 1, "reminder": 1, "alert": 1}
  *   daily_send_cap  10          -- ramps 10 -> 20 -> 30 -> 40, PLAN.md §7.1
  *   daily_cost_cap  2.00        -- USD
  *   send_window     {"days": [2,3,4], "start_hour": 9, "end_hour": 16}
+ *
+ * ---------------------------------------------------------------------------
+ * Two rows in this table are NOT in `SettingsMap`, on purpose
+ * ---------------------------------------------------------------------------
+ *
+ * The header used to claim "exactly five keys exist". That has not been true
+ * since the RLS migration, and it is now wrong twice:
+ *
+ *   allowed_email   inserted by 20260731140000_rls_operator_only.sql. It is
+ *                   read by `public.is_operator()` — in SQL, by the database,
+ *                   as the authorisation predicate on every table. No
+ *                   TypeScript reads it, and nothing in this file should be
+ *                   able to write it: a `setSetting('allowed_email', …)` call
+ *                   is a way to hand the whole database to another address.
+ *
+ *   gmail_watch     step 8's Gmail cursor — `{ history_id, expiration,
+ *                   updated_at }`, read and written only by `readGmailWatch` /
+ *                   `writeGmailWatch` in `gmail-read.ts`. It is per-deploy
+ *                   position in a mailbox, not an operational flag the operator
+ *                   would ever set in `/brain`, and putting it on the same
+ *                   screen as the kill switch would invite exactly one hand-edit
+ *                   too many.
+ *
+ * Both are reached through their own accessors rather than `getSetting`, and
+ * that is not a workaround — `SettingKey` is a closed union and `parseSetting`
+ * throws in its `default` branch precisely so an unknown key cannot be read as
+ * though it were typed. Adding either of these to the union would trade that
+ * guarantee for nothing: neither has a `SETTING_DEFAULTS` entry that would make
+ * sense, and the absence of a cursor row means something specific (bootstrap
+ * from the current history id) that a default would quietly paper over.
+ *
+ * The rule, stated once: `settings` is the table; `SettingsMap` is the subset of
+ * it that is operator-facing configuration. They were the same set for one step
+ * and are not any more.
  */
 
 import type { Db } from './db';

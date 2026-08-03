@@ -33,7 +33,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 import { createServiceClient } from './db';
+import type { Db } from './db';
+import { appTimezone } from './env';
 import { costUsd, isModel, type Model, type TokenUsage } from './pricing';
+import { partsInZone, zonedTimeToUtc } from './zone';
 
 export { MODELS, isModel, costUsd, formatUsd, type Model } from './pricing';
 
@@ -130,32 +133,117 @@ function client(): Anthropic {
 }
 
 /**
+ * Rows of `agent_runs` the spend query will read for one day.
+ *
+ * A busy day is a few hundred: forty contacts at one or two calls each, plus
+ * inbound. Five thousand is far past anything this system can legitimately
+ * produce, and reaching it means either a loop — which is the thing the cap
+ * exists to stop — or a PostgREST `db-max-rows` ceiling truncating the answer.
+ * Either way the sum is no longer the day's spend, and see `assertUnderCostCap`
+ * for what happens then.
+ */
+export const MAX_COST_ROWS = 5000;
+
+/**
+ * The start of today, in the operator's zone.
+ *
+ * Everything else in this repo — the 08:00 run, the send window, the cadence
+ * dates — is `Europe/Athens`, and a cap that resets at 03:00 local in summer is
+ * a cap that behaves differently in July than in January for no reason anybody
+ * could reconstruct from the setting's name.
+ */
+function startOfLocalDay(now: Date, timeZone: string): Date {
+  const parts = partsInZone(now, timeZone);
+  return zonedTimeToUtc(parts.year, parts.month, parts.day, 0, 0, timeZone);
+}
+
+/**
  * Sum today's spend from `agent_runs` and compare against `settings.daily_cost_cap`.
  *
  * Checked BEFORE the call rather than after: the failure this guards against is
  * a retry loop, and a loop that checks afterwards has already spent the money.
+ *
+ * ---------------------------------------------------------------------------
+ * Both reads fail CLOSED, and this is the whole point of the function
+ * ---------------------------------------------------------------------------
+ *
+ * This is the only spend ceiling in the repo. `LlmError.kind === 'cost_cap'` is
+ * thrown from nowhere else, and `routes/gmail-webhook.ts` promises in writing
+ * that a loop pointed at the public webhook URL by somebody holding both
+ * credentials "still cannot spend more than `settings.daily_cost_cap` in a day".
+ *
+ * Both queries used to discard their `error`. A PostgREST error, a 5xx, a pooler
+ * restart or a dropped socket on either one made `data` null, and null read as
+ * *there is no cap* on the first query and as *nothing has been spent* on the
+ * second. So the one guarantee the public route makes held only while two
+ * unchecked reads succeeded — and the window in which they fail is exactly the
+ * window in which something is hammering the database, which is the window a
+ * runaway loop produces. `guardrails.ts` states the same rule for the send count
+ * and follows it: a count we could not read is not evidence that nothing went
+ * out.
+ *
+ * So: a read that errors throws `cost_cap` and halts the agent. An unset or
+ * non-numeric `daily_cost_cap` still means no ceiling — that is a value somebody
+ * chose, not a value we failed to read — and the seed writes one.
+ *
+ * The row ceiling is the third failure of the same shape. `select('cost_usd')`
+ * with no bound is silently truncated by PostgREST's `db-max-rows` if the
+ * project sets one, and a truncated sum under-counts, which is a cap that never
+ * trips. Asking for one row more than the ceiling turns that from invisible into
+ * a refusal.
  */
-async function assertUnderCostCap(): Promise<void> {
-  const supabase = createServiceClient();
+export async function assertUnderCostCap(
+  /** Injectable so the fail-closed branches can be proved without a database. */
+  db?: Db,
+  /** Injectable so the day boundary can be asserted at a known instant. */
+  now: Date = new Date(),
+): Promise<void> {
+  const supabase = db ?? createServiceClient();
 
-  const { data: setting } = await supabase
+  const { data: setting, error: settingError } = await supabase
     .from('settings')
     .select('value')
     .eq('key', 'daily_cost_cap')
     .maybeSingle();
 
+  if (settingError !== null) {
+    throw new LlmError(
+      `Could not read settings.daily_cost_cap (${settingError.message}). Refusing to call a ` +
+        'model rather than run with no spend ceiling.',
+      'cost_cap',
+    );
+  }
+
   const cap = typeof setting?.value === 'number' ? setting.value : null;
   if (cap === null) return; // unset means no ceiling; the seed sets one
 
-  const since = new Date();
-  since.setUTCHours(0, 0, 0, 0);
+  const since = startOfLocalDay(now, appTimezone());
 
-  const { data: runs } = await supabase
+  const { data: runs, error: runsError } = await supabase
     .from('agent_runs')
     .select('cost_usd')
-    .gte('created_at', since.toISOString());
+    .gte('created_at', since.toISOString())
+    .limit(MAX_COST_ROWS + 1);
 
-  const spent = (runs ?? []).reduce(
+  if (runsError !== null) {
+    throw new LlmError(
+      `Could not read today's spend from agent_runs (${runsError.message}). Refusing to call a ` +
+        'model rather than assume the daily cost cap is clear.',
+      'cost_cap',
+    );
+  }
+
+  const rows = runs ?? [];
+  if (rows.length > MAX_COST_ROWS) {
+    throw new LlmError(
+      `There are more than ${MAX_COST_ROWS} agent runs today, which is far past anything this ` +
+        'system produces legitimately. Today\'s spend can no longer be summed reliably, so no ' +
+        'further model calls are made. Look for a loop before raising anything.',
+      'cost_cap',
+    );
+  }
+
+  const spent = rows.reduce(
     (total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0),
     0,
   );

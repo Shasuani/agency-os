@@ -220,3 +220,47 @@ export const STAGE_FILTER_OPTIONS: readonly VocabOption[] = [
 export function toStageFilter(value: unknown): StageFilter {
   return isStage(value) ? value : 'all';
 }
+
+// ---------------------------------------------------------------------------
+// Naming a contact
+// ---------------------------------------------------------------------------
+
+/** `'  '` and `''` are not values. Postgres will happily store either in a
+ *  nullable text column, and every screen has to treat them as absent. */
+export function blankToNull(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * What to call a contact, in one place.
+ *
+ * Nothing in the schema guarantees a name. An imported row can carry only a
+ * business, and the CSV can carry neither — but the /pipeline cell still has to
+ * say something a person can click, the contact page still needs a heading, and
+ * a task card's contact line is also its accessible name and cannot be blank.
+ *
+ * That rule was written out three times before this function existed: privately
+ * in /pipeline's `toRow`, again in the contact detail page's heading, and again
+ * in step 6's Today card. All three agreed, which is the state duplication is in
+ * right up until the moment somebody improves one of them. It lives here rather
+ * than beside any one screen because it is contact vocabulary in the same sense
+ * the stage labels are: it decides what the operator reads when the data does
+ * not say.
+ *
+ * `secondary` is the business, and only when there is a name for it to sit
+ * under — otherwise the business is already the primary line and repeating it
+ * reads as a rendering bug.
+ */
+export function contactLine(
+  name: string | null | undefined,
+  business: string | null | undefined,
+): { primary: string; secondary: string | null } {
+  const cleanName = blankToNull(name);
+  const cleanBusiness = blankToNull(business);
+  return {
+    primary: cleanName ?? cleanBusiness ?? 'Unnamed contact',
+    secondary: cleanName !== null ? cleanBusiness : null,
+  };
+}

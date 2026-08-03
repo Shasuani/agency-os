@@ -10,11 +10,17 @@
     ".": "./src/index.ts",
     "./cadence": "./src/cadence.ts",
     "./package.json": "./package.json",
-    "./llm": "./src/llm.ts"
+    "./llm": "./src/llm.ts",
+    "./zone": "./src/zone.ts",
+    "./send-window": "./src/send-window.ts",
+    "./guardrails": "./src/guardrails.ts",
+    "./gmail": "./src/gmail.ts",
+    "./gmail-read": "./src/gmail-read.ts"
   },
+  "//test": "`find`, not a glob — see apps/worker/package.json for the argument. Nothing is being skipped here today (every core test is at the top of src/), but the old `src/*.test.ts` had the same trap set for the first test written in a subdirectory, and three packages that agree are easier to trust than two that agree and one that does not.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/*.test.ts"
+    "test": "node --import tsx --test $(find src -name '*.test.ts' | sort)"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

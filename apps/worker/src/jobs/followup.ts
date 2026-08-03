@@ -55,16 +55,33 @@
  * `DRY_RUN` is deliberately not consulted anywhere in this file. Dry-run stubs
  * the Gmail send (PLAN §7), and the whole point of it is that the agent still
  * runs and still produces real drafts to read. This step has no send path.
+ *
+ * ---------------------------------------------------------------------------
+ * Style examples (PLAN §6 step 9) — two queries a run, and never fatal
+ * ---------------------------------------------------------------------------
+ *
+ * The operator's past edits are read **once per language per run** into a small
+ * map, not once per contact. There are two languages, so a run costs at most two
+ * extra queries however many contacts it has; per contact it would be forty, all
+ * returning the same forty rows.
+ *
+ * The load is wrapped in its own try/catch and an empty result is cached on
+ * failure, for two separate reasons. First, a style hint is a nicety and a
+ * contact's follow-up is not: a failed query here must cost nobody their draft,
+ * so the run continues without examples rather than counting a contact as
+ * `failed`. Second, caching the failure means one log line per language per run
+ * instead of one per contact — an outage that logs forty times is an outage that
+ * hides whatever else happened that morning.
  */
 
 import { appTimezone, createServiceClient, getSetting, isKillSwitchOn } from '@agency/core';
-import type { Contact, Db, Interaction, Stage, TaskInsert } from '@agency/core';
+import type { Contact, Db, Interaction, Language, Stage, TaskInsert } from '@agency/core';
 import { findSuppressionTag, nextTouch } from '@agency/core/cadence';
 import type { CadenceResult } from '@agency/core/cadence';
 import { LlmError, call } from '@agency/core/llm';
 import type { Trigger } from '@agency/core/llm';
 
-import { buildFollowupPrompt } from './followup-prompt.js';
+import { buildFollowupPrompt, promptLanguage } from './followup-prompt.js';
 import {
   INTERACTION_HISTORY_LIMIT,
   MAX_CONTACTS_PER_RUN,
@@ -78,6 +95,8 @@ import {
   planPushOut,
   screenContact,
 } from './followup-select.js';
+import { loadStyleExamples } from './style-examples.js';
+import type { StyleExample } from './style-examples.js';
 
 const AGENT = 'followup';
 
@@ -165,9 +184,11 @@ export async function runFollowup(options: RunFollowupOptions = {}): Promise<Fol
     // it.
     brain = await loadBrain(db);
 
-    // A pending draft for the same contact means the operator has not got to
-    // yesterday's card yet. Drafting a second one does not help them.
-    alreadyQueued = await loadContactsWithPendingDraft(
+    // An unresolved draft for the same contact — from either agent, waiting on
+    // the operator or waiting on the send window — means an email to them is
+    // already in flight. Drafting a second one does not help them and can mail
+    // them twice. See `loadContactsWithOpenDraft`.
+    alreadyQueued = await loadContactsWithOpenDraft(
       db,
       contacts.map((contact) => contact.id),
     );
@@ -186,6 +207,28 @@ export async function runFollowup(options: RunFollowupOptions = {}): Promise<Fol
 
   let cacheWarned = false;
   let halted: string | null = null;
+
+  // Step 9. Filled lazily, at most one entry per language per run. An empty
+  // array is cached on failure on purpose — see the header.
+  const styleExamplesByLanguage = new Map<Language, StyleExample[]>();
+
+  const styleExamplesFor = async (language: Language): Promise<StyleExample[]> => {
+    const cached = styleExamplesByLanguage.get(language);
+    if (cached !== undefined) return cached;
+
+    let examples: StyleExample[] = [];
+    try {
+      examples = await loadStyleExamples(db, language);
+    } catch (error) {
+      log('could not load style examples — drafting without them', {
+        language,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    styleExamplesByLanguage.set(language, examples);
+    return examples;
+  };
 
   for (const [index, contact] of contacts.entries()) {
     if (halted !== null) {
@@ -207,6 +250,14 @@ export async function runFollowup(options: RunFollowupOptions = {}): Promise<Fol
         timeZone,
         trigger,
         brain,
+        // Loaded for the language the prompt has decided to write in, not for
+        // the column. The prompt filters what it is given a third time against
+        // the same decision, so keying this on `contacts.language` meant that
+        // every contact whose written language differed from their column — the
+        // exact case the heuristic exists for — got an empty list and no style
+        // examples at all, silently. Deferred into `processContact` because the
+        // decision needs the contact's interactions, which are loaded there.
+        styleExamplesFor,
         autonomyLevel,
         alreadyQueued: alreadyQueued.has(contact.id),
         onCacheIssue: (issue) => {
@@ -259,6 +310,28 @@ export async function runFollowup(options: RunFollowupOptions = {}): Promise<Fol
     }
   }
 
+  // A full run that drafted nothing is the signature of a stuck queue head.
+  //
+  // The no-email case is filtered at the query now, but it is not the only row
+  // that can stay due indefinitely: `screenContact` returns `alert` for a null
+  // stage and for an unparseable `next_touch_at`, and both of those deliberately
+  // keep their date. Enough of them and the sixty oldest due contacts are all
+  // rows the agent cannot act on, the agent quietly stops drafting for everyone
+  // else, and the only trace is a log line nobody reads. This is the card that
+  // says so. It is filed only when both conditions hold, so an ordinary busy
+  // morning — sixty contacts, forty drafts — files nothing.
+  if (summary.considered >= MAX_CONTACTS_PER_RUN && summary.drafted === 0 && halted === null) {
+    await fileAlert(
+      db,
+      null,
+      'The follow-up run filled up and drafted nothing',
+      `All ${MAX_CONTACTS_PER_RUN} contacts the run could look at were skipped, so nobody ` +
+        'behind them was reached either. Open /pipeline sorted by follow-up date and fix the ' +
+        'rows at the top — usually a missing stage or a follow-up date that will not parse.',
+      autonomyLevel,
+    );
+  }
+
   // SPEC §4 step 6 is one notification, not one per task — and step 7 owns
   // delivery. Step 5's whole responsibility is the count.
   log(`${summary.drafted} follow-ups ready`, { ...summary, halted });
@@ -287,6 +360,25 @@ export async function runFollowup(options: RunFollowupOptions = {}): Promise<Fol
  * **The grace window.** `next_touch_at` is written at exactly 08:00 local and
  * the cron fires at exactly 08:00 local; a few seconds of timer drift the wrong
  * way would miss the entire day's queue. See `SELECTION_GRACE_MS`.
+ *
+ * **Contacts with no email address are excluded here, not screened out later,
+ * and that is a correctness fix rather than an optimisation.**
+ * `screenContact` deliberately leaves such a contact's `next_touch_at` alone —
+ * the date is their reminder on `/pipeline` and pushing it out every morning
+ * would take the reminder away. The consequence, which was live until this
+ * filter existed, is that the row stays due *forever*, and because the ordering
+ * is oldest-first it stays at the head of the ordering forever. Sixty NFC-card
+ * contacts entered with a name and a phone number — the commonest contact in
+ * this pipeline, per `followup-select.ts` — are enough to fill
+ * `MAX_CONTACTS_PER_RUN` permanently. From that morning on the query returns
+ * only those sixty, every one is screened out, `drafted` is 0 every day, and
+ * the whole agent has stopped with nothing but a ceiling log line to say so.
+ *
+ * Filtering at the database keeps both properties: the date is still untouched,
+ * so `/pipeline` still lifts them to the top on the day they are due, and they
+ * never consume one of the sixty slots. `screenContact`'s own no-email branch
+ * stays where it is — it is the tested assertion, and this filter is a `like`
+ * against a text column, which is not the place to be the only guard.
  */
 export async function selectDueContacts(db: Db, now: Date): Promise<Contact[]> {
   const dueBy = new Date(now.getTime() + SELECTION_GRACE_MS).toISOString();
@@ -296,6 +388,11 @@ export async function selectDueContacts(db: Db, now: Date): Promise<Contact[]> {
     .select('*')
     .or('do_not_contact.is.null,do_not_contact.is.false')
     .or('stage.is.null,stage.neq.lost')
+    // The same test `hasEmailAddress` applies, expressed in PostgREST. `not
+    // is null` and `like '%@%'` between them reject null, the empty string and
+    // a phone number typed into the wrong box.
+    .not('email', 'is', null)
+    .like('email', '%@%')
     .lte('next_touch_at', dueBy)
     .order('next_touch_at', { ascending: true })
     .limit(MAX_CONTACTS_PER_RUN);
@@ -327,15 +424,41 @@ async function loadInteractions(db: Db, contactId: string): Promise<Interaction[
   return data ?? [];
 }
 
-async function loadContactsWithPendingDraft(db: Db, ids: string[]): Promise<Set<string>> {
+/**
+ * Contacts who already have an email in flight, so today's run leaves them be.
+ *
+ * Two filters that used to be here are gone, and each of them was a way to mail
+ * the same person twice in one week.
+ *
+ * **`status` is `pending` OR `approved`, not `pending` alone.** `approveTask`
+ * moves the row to `approved` and writes `send_after`, which the send window
+ * can put days out — with the seeded `[2,3,4] / 09:00–16:00`, an approval at
+ * 16:30 on a Thursday schedules for the following Tuesday. Meanwhile the draft
+ * branch of `processContact` already set `next_touch_at` to draft time plus the
+ * cadence interval, which can easily be Sunday. On Monday the contact was due,
+ * had no *pending* draft, and got a second one written. Both eventually left;
+ * the only thing between them was the 48-hour cooldown, which spaces two
+ * emails rather than preventing them.
+ *
+ * **There is no `agent` filter.** An inbox reply waiting for approval is an
+ * email to this contact that has not gone out yet, and drafting a cold nudge on
+ * top of it is exactly the "somebody we are mid-conversation with" failure
+ * `inbox.ts`'s `pushNextTouch` exists to prevent — which it only mitigates,
+ * with a three-day floor, so a reply card left unapproved for four days used to
+ * produce precisely that.
+ *
+ * `sent`, `rejected` and `skipped` are all resolved and none of them holds a
+ * contact back: the message either left (and the cooldown and `last_touch_at`
+ * take over) or the operator decided against it.
+ */
+export async function loadContactsWithOpenDraft(db: Db, ids: string[]): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
 
   const { data, error } = await db
     .from('tasks')
     .select('contact_id')
-    .eq('agent', AGENT)
     .eq('type', 'draft_email')
-    .eq('status', 'pending')
+    .in('status', ['pending', 'approved'])
     .in('contact_id', ids);
 
   if (error) throw new Error(`Failed to check the pending queue: ${error.message}`);
@@ -362,6 +485,8 @@ type ProcessArgs = {
   timeZone: string;
   trigger: Trigger;
   brain: Record<string, string>;
+  /** Per-language, cached for the run, never fatal. See the header. */
+  styleExamplesFor: (language: Language) => Promise<StyleExample[]>;
   autonomyLevel: number;
   alreadyQueued: boolean;
   onCacheIssue: (issue: string) => void;
@@ -393,9 +518,9 @@ async function processContact(args: ProcessArgs): Promise<ContactOutcome> {
   }
 
   if (args.alreadyQueued) {
-    // Left due on purpose: the moment the operator clears the pending card, the
-    // contact is eligible again on the next run.
-    return { kind: 'skipped', reason: 'a follow-up draft is already waiting in the queue' };
+    // Left due on purpose: the moment the card is resolved — sent, rejected or
+    // skipped — the contact is eligible again on the next run.
+    return { kind: 'skipped', reason: 'an email to this contact is already in the queue' };
   }
 
   // `screenContact` has already rejected a null stage; this narrows it for the
@@ -434,10 +559,17 @@ async function processContact(args: ProcessArgs): Promise<ContactOutcome> {
   }
 
   // ---- Ask the model ------------------------------------------------------
+  // The same slice goes to both calls on purpose: `promptLanguage` reads the
+  // contact's own messages, so a different window could decide a different
+  // language from the one the prompt then writes in, and the examples would be
+  // filtered away again.
+  const promptInteractions = interactions.slice(0, PROMPT_INTERACTION_LIMIT);
+
   const prompt = buildFollowupPrompt({
     brain: args.brain,
     contact,
-    interactions: interactions.slice(0, PROMPT_INTERACTION_LIMIT),
+    interactions: promptInteractions,
+    styleExamples: await args.styleExamplesFor(promptLanguage(contact, promptInteractions)),
   });
 
   const cacheIssue = cacheBreakpointIssue(prompt.system);

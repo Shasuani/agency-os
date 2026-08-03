@@ -6,7 +6,7 @@ import type { Contact } from '@agency/core';
 import { ContactTable, type PipelineRow } from '@/components/pipeline/contact-table';
 import { EmptyState } from '@/components/pipeline/empty-state';
 import { PipelineFilters } from '@/components/pipeline/pipeline-filters';
-import { cx } from '@/components/ui/button';
+import { Stat } from '@/components/ui/stat';
 import { listContacts } from '@/lib/contacts';
 import {
   daysBetween,
@@ -24,7 +24,10 @@ import {
   LANGUAGE_LABELS,
   SORT_OPTIONS,
   STAGE_LABELS,
+  blankToNull,
+  contactLine,
   dayKeyInZone,
+  dayKeyOf,
   toContactSort,
   toStageFilter,
   toTagFilter,
@@ -173,30 +176,6 @@ export default async function PipelinePage({ searchParams }: { searchParams: Sea
   );
 }
 
-/* -------------------------------------------------------------------------- */
-
-function Stat({
-  value,
-  label,
-  tone = 'text-ink',
-  title,
-}: {
-  value: number;
-  label: string;
-  tone?: string;
-  title?: string;
-}) {
-  return (
-    <div className="flex items-baseline gap-1.5" title={title}>
-      <dt className="sr-only">{label}</dt>
-      <dd className={cx('numeric text-md', tone)}>{value}</dd>
-      <span aria-hidden="true" className="label-caps text-muted">
-        {label}
-      </span>
-    </div>
-  );
-}
-
 /* --------------------------------------------------------------------------
  * Row mapping
  * ----------------------------------------------------------------------- */
@@ -207,16 +186,14 @@ function first(value: string | string[] | undefined): string | undefined {
 }
 
 function toRow(contact: Contact, today: string, timeZone: string): PipelineRow {
-  const name = blankToNull(contact.name);
-  const business = blankToNull(contact.business);
+  // The naming rule lives in lib/contact-vocab.ts, where the contact page and
+  // the Today card reach it too. It was written out here first, then twice more.
+  const names = contactLine(contact.name, contact.business);
 
   return {
     id: contact.id,
-    // Nothing in the schema guarantees a name — an imported row can carry only a
-    // business, and the CSV can carry neither. The cell still has to say
-    // something a person can click.
-    primary: name ?? business ?? 'Unnamed contact',
-    secondary: name !== null ? business : null,
+    primary: names.primary,
+    secondary: names.secondary,
     stage: contact.stage,
     language:
       contact.language === null
@@ -238,18 +215,12 @@ function toRow(contact: Contact, today: string, timeZone: string): PipelineRow {
   };
 }
 
-function blankToNull(value: string | null): string | null {
-  if (value === null) return null;
-  const trimmed = value.trim();
-  return trimmed === '' ? null : trimmed;
-}
-
 function toNextTouch(
   iso: string | null,
   today: string,
   timeZone: string,
 ): { date: string; relative: string; tone: DueTone } | null {
-  const day = toDayKey(iso, timeZone);
+  const day = dayKeyOf(iso, timeZone);
   if (day === null) return null;
 
   const offset = daysBetween(today, day);
@@ -269,7 +240,7 @@ function toLastTouch(
   today: string,
   timeZone: string,
 ): { date: string; relative: string } | null {
-  const day = toDayKey(iso, timeZone);
+  const day = dayKeyOf(iso, timeZone);
   if (day === null) return null;
 
   const offset = daysBetween(today, day);
@@ -278,10 +249,3 @@ function toLastTouch(
   return { date: formatDay(day, yearOf(today)), relative: pastLabel(offset) };
 }
 
-/** A stored timestamptz → the calendar day it falls on in the operator's zone. */
-function toDayKey(iso: string | null, timeZone: string): string | null {
-  if (iso === null) return null;
-  const instant = new Date(iso);
-  if (Number.isNaN(instant.getTime())) return null;
-  return dayKeyInZone(instant, timeZone);
-}

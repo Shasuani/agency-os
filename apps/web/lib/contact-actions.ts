@@ -30,6 +30,39 @@ import { fail, isPastDay, isUuid, parseContactForm, type ActionResult } from './
 const PIPELINE_PATH = '/pipeline';
 
 /**
+ * Turn the one database constraint the operator can trip into a sentence.
+ *
+ * `contacts_email_unique` (migration 20260803160000) allows one contact row per
+ * address, because `do_not_contact` and the 48-hour cooldown are both per row
+ * and two rows sharing an address are two ways to email one person after they
+ * asked you not to. The reasoning is written out in the migration.
+ *
+ * Without this the operator gets `Could not save the contact: duplicate key
+ * value violates unique constraint "contacts_email_unique"` — which is true,
+ * unreadable, and does not say what to do. The error is matched on the index
+ * name rather than only on `23505` so that a different constraint added later
+ * does not silently inherit this message.
+ */
+function duplicateEmailError(
+  error: { code?: string | null; message?: string | null } | null,
+): ActionResult | null {
+  if (error === null) return null;
+
+  const message = error.message ?? '';
+  const named = message.includes('contacts_email_unique');
+  // The index name is the reliable signal; `23505` is the fallback for a driver
+  // or a proxy that drops the detail. `contacts` has exactly one other unique
+  // constraint — the primary key, on a server-generated uuid — so a unique
+  // violation on this table that is not this index is not a thing that happens.
+  if (!named && error.code !== '23505') return null;
+
+  return fail({
+    email:
+      'A contact with that email address already exists. Open theirs in /pipeline rather than adding a second row — an opt-out and the 48-hour send cooldown are recorded per row, so two rows are two ways to email one person.',
+  });
+}
+
+/**
  * Create a contact.
  *
  * `touch_count` and `last_touch_at` are left to the database: they are the
@@ -47,6 +80,9 @@ export async function createContact(formData: FormData): Promise<ActionResult> {
     .insert(parsed.value)
     .select('id')
     .single();
+
+  const duplicate = duplicateEmailError(error);
+  if (duplicate !== null) return duplicate;
 
   if (error !== null || data === null) {
     return fail({ form: `Could not save the contact: ${error?.message ?? 'unknown error'}` });
@@ -125,6 +161,9 @@ export async function updateContact(id: string, formData: FormData): Promise<Act
     : value;
 
   const { error } = await supabase.from('contacts').update(patch).eq('id', id);
+
+  const duplicate = duplicateEmailError(error);
+  if (duplicate !== null) return duplicate;
 
   if (error !== null) return fail({ form: `Could not save the contact: ${error.message}` });
 
