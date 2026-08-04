@@ -709,7 +709,7 @@ by `tasks.agent` or by contact. Never to redact.
 ### Step 10 — Lead Research agent (specified, gated, not started)
 
 Where the *next* warm lead comes from, rather than making sure existing ones
-aren't forgotten. Full spec in **[LEAD_RESEARCH.md](./LEAD_RESEARCH.md)**.
+aren't forgotten. The full spec is kept outside this repository.
 
 This revises `SPEC.md` §10, which put cold outbound out of scope for v1. It stays
 out of scope for v1 — this is step 10, after v1 ships.

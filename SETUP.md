@@ -944,7 +944,7 @@ precisely so that reading `/health` is not a daily obligation.
 
 ## Step 10 — Lead Research is specified and deliberately not built
 
-`LEAD_RESEARCH.md` is a complete specification for an agent that finds the *next*
+A separate specification (kept outside this repo) covers an agent that finds the *next*
 warm lead rather than making sure the existing ones are not forgotten. **None of
 it exists in this repo, and building it now would be a mistake.**
 

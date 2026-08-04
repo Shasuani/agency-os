@@ -23,7 +23,6 @@ tracks how far it has got.
 | [SETUP.md](./SETUP.md) | The one-time operator procedure: keys, database, brain, Google Cloud, deploys, and the order to turn `DRY_RUN` off in. Every step says how you know it worked. |
 | [STATUS.md](./STATUS.md) | What is actually done versus written. The file that exists because "the tests pass" and "it works" are different sentences. |
 | [apps/web/DESIGN.md](./apps/web/DESIGN.md) | The design system. If a screen contradicts it, the screen is wrong. |
-| [LEAD_RESEARCH.md](./LEAD_RESEARCH.md) | Step 10, specified and deliberately not built. See below. |
 | [brain/README.md](./brain/README.md) | How to write the business facts the agents draft from. This is the product; the code is scaffolding around it. |
 | [scripts/CONTACTS_CSV.md](./scripts/CONTACTS_CSV.md) | The CSV contract for the contact importer. |
 
@@ -174,11 +173,11 @@ the step has been exercised against real data — see the note at the top, and
 - [x] **7 — Notifications.** Web Push subscription + one digest at the end of the morning run.
 - [x] **8 — Inbox agent.** Gmail `users.watch` → Pub/Sub → webhook, classify, route, reply in-thread.
 - [x] **9 — Edit-as-training-data.** `final_body` vs `draft_body` fed back as style examples.
-- [ ] **10 — Lead Research.** Specified in `LEAD_RESEARCH.md`. Deliberately not built.
+- [ ] **10 — Lead Research.** Specified separately (kept out of this repo). Deliberately not built.
 
 ### Step 10 is specified and deliberately not built
 
-`LEAD_RESEARCH.md` fully specifies an agent that finds the *next* warm lead
+A separate specification (not published in this repo) covers an agent that finds the *next* warm lead
 rather than making sure the existing ones are not forgotten. None of it exists in
 this repo, and `PLAN.md` §6 gates it on four conditions:
 

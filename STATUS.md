@@ -96,7 +96,7 @@ so re-running one that was already applied costs nothing.
   recipient receiving one. Step 7 wants a notification arriving. Step 8 wants a
   real inbound reply landing as a classified task. Step 9 wants an edited draft
   to measurably shift the next one. None of the five has been attempted.
-- **Step 10** — Lead Research agent. Specified in `LEAD_RESEARCH.md`, gated.
+- **Step 10** — Lead Research agent. Specified outside this repo, gated.
 
 ---
 
